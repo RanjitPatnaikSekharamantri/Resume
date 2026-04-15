@@ -12,6 +12,15 @@ const protectedPaths = [
   "/settings",
 ];
 
+const protectedApiPaths = [
+  "/api/applications",
+  "/api/resumes",
+  "/api/profile",
+  "/api/cover-letters",
+  "/api/ai",
+  "/api/analytics",
+];
+
 export async function middleware(request: NextRequest) {
   const token = await getToken({
     req: request,
@@ -20,16 +29,27 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  const isProtected = protectedPaths.some((path) =>
+  // Protect API routes — return 401 JSON instead of redirect
+  const isProtectedApi = protectedApiPaths.some((path) =>
     pathname.startsWith(path)
   );
 
-  if (isProtected && !token) {
+  if (isProtectedApi && !token) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Protect page routes — redirect to login
+  const isProtectedPage = protectedPaths.some((path) =>
+    pathname.startsWith(path)
+  );
+
+  if (isProtectedPage && !token) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
+  // Redirect authenticated users away from auth pages
   if ((pathname === "/login" || pathname === "/signup") && token) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
@@ -48,5 +68,11 @@ export const config = {
     "/settings/:path*",
     "/login",
     "/signup",
+    "/api/applications/:path*",
+    "/api/resumes/:path*",
+    "/api/profile/:path*",
+    "/api/cover-letters/:path*",
+    "/api/ai/:path*",
+    "/api/analytics/:path*",
   ],
 };

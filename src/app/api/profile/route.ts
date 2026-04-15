@@ -1,17 +1,14 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const profile = await prisma.profile.findUnique({
-      where: { userId: session.user.id },
+      where: { userId: userId! },
       include: {
         user: {
           select: { name: true, email: true, image: true },
@@ -20,8 +17,8 @@ export async function GET() {
     });
 
     return NextResponse.json(profile);
-  } catch (error) {
-    console.error("Get profile error:", error);
+  } catch (err) {
+    console.error("Get profile error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -31,33 +28,31 @@ export async function GET() {
 
 export async function PATCH(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const body = await req.json();
     const { name, ...profileData } = body;
 
     if (name) {
       await prisma.user.update({
-        where: { id: session.user.id },
+        where: { id: userId! },
         data: { name },
       });
     }
 
     const profile = await prisma.profile.upsert({
-      where: { userId: session.user.id },
+      where: { userId: userId! },
       update: profileData,
       create: {
-        userId: session.user.id,
+        userId: userId!,
         ...profileData,
       },
     });
 
     return NextResponse.json(profile);
-  } catch (error) {
-    console.error("Update profile error:", error);
+  } catch (err) {
+    console.error("Update profile error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

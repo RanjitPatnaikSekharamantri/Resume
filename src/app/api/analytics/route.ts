@@ -1,17 +1,14 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const applications = await prisma.application.findMany({
-      where: { userId: session.user.id },
+      where: { userId: userId! },
       select: {
         id: true,
         status: true,
@@ -29,8 +26,6 @@ export async function GET() {
     const weeklyActivity: Record<string, number> = {};
     const now = new Date();
     for (let i = 11; i >= 0; i--) {
-      const date = new Date(now);
-      date.setDate(date.getDate() - i * 7);
       const weekKey = `Week ${12 - i}`;
       weeklyActivity[weekKey] = 0;
     }
@@ -122,8 +117,8 @@ export async function GET() {
       interviewRate: conversionRates.screeningToInterview,
       offerRate: conversionRates.interviewToOffer,
     });
-  } catch (error) {
-    console.error("Get analytics error:", error);
+  } catch (err) {
+    console.error("Get analytics error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

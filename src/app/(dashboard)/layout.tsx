@@ -1,21 +1,12 @@
 "use client";
 
-import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { DashboardLayout } from "@/components/layout/dashboard-layout";
+import { useRequireAuth } from "@/lib/hooks/use-require-auth";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { status } = useSession();
-  const router = useRouter();
+  const { isLoading, isAuthenticated } = useRequireAuth();
 
-  useEffect(() => {
-    if (status === "unauthenticated") {
-      router.push("/login");
-    }
-  }, [status, router]);
-
-  if (status === "loading") {
+  if (isLoading) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50/50">
         <div className="flex items-center gap-3">
@@ -26,7 +17,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (status === "unauthenticated") {
+  if (!isAuthenticated) {
     return null;
   }
 

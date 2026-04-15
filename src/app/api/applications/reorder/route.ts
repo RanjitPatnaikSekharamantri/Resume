@@ -1,20 +1,17 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
 export async function PATCH(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const body = await req.json();
     const { applicationId, newStatus, newOrder } = body;
 
     const existing = await prisma.application.findFirst({
-      where: { id: applicationId, userId: session.user.id },
+      where: { id: applicationId, userId: userId! },
     });
 
     if (!existing) {
@@ -47,8 +44,8 @@ export async function PATCH(req: Request) {
     }
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Reorder error:", error);
+  } catch (err) {
+    console.error("Reorder error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

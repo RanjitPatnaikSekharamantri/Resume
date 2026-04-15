@@ -1,23 +1,20 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const resumes = await prisma.baseResume.findMany({
-      where: { userId: session.user.id },
+      where: { userId: userId! },
       orderBy: { updatedAt: "desc" },
     });
 
     return NextResponse.json(resumes);
-  } catch (error) {
-    console.error("Get resumes error:", error);
+  } catch (err) {
+    console.error("Get resumes error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -27,10 +24,8 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const formData = await req.formData();
     const name = formData.get("name") as string;
@@ -45,11 +40,11 @@ export async function POST(req: Request) {
     }
 
     const fileType = file.name.endsWith(".pdf") ? "pdf" : "docx";
-    const fileUrl = `/uploads/${session.user.id}/${Date.now()}-${file.name}`;
+    const fileUrl = `/uploads/${userId}/${Date.now()}-${file.name}`;
 
     const resume = await prisma.baseResume.create({
       data: {
-        userId: session.user.id,
+        userId: userId!,
         name,
         fileName: file.name,
         fileUrl,
@@ -59,8 +54,8 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json(resume, { status: 201 });
-  } catch (error) {
-    console.error("Create resume error:", error);
+  } catch (err) {
+    console.error("Create resume error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

@@ -48,6 +48,10 @@ export function Sidebar() {
         .toUpperCase()
     : session?.user?.email?.[0]?.toUpperCase() || "U";
 
+  const handleLogout = () => {
+    signOut({ callbackUrl: "/login" });
+  };
+
   return (
     <TooltipProvider delayDuration={0}>
       <aside
@@ -56,8 +60,9 @@ export function Sidebar() {
           collapsed ? "w-[68px]" : "w-[240px]"
         )}
       >
+        {/* Logo */}
         <div className="flex items-center h-14 px-4 border-b border-gray-200">
-          {!collapsed && (
+          {!collapsed ? (
             <Link href="/dashboard" className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center">
                 <Sparkles className="w-4 h-4 text-white" />
@@ -66,8 +71,7 @@ export function Sidebar() {
                 AI Career OS
               </span>
             </Link>
-          )}
-          {collapsed && (
+          ) : (
             <Link href="/dashboard" className="mx-auto">
               <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center">
                 <Sparkles className="w-4 h-4 text-white" />
@@ -76,6 +80,7 @@ export function Sidebar() {
           )}
         </div>
 
+        {/* Navigation */}
         <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
           {navigation.map((item) => {
             const isActive = pathname?.startsWith(item.href);
@@ -90,7 +95,9 @@ export function Sidebar() {
                     : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
                 )}
               >
-                <item.icon className={cn("w-4 h-4 shrink-0", isActive && "text-blue-600")} />
+                <item.icon
+                  className={cn("w-4 h-4 shrink-0", isActive && "text-blue-600")}
+                />
                 {!collapsed && <span>{item.name}</span>}
               </Link>
             );
@@ -110,10 +117,12 @@ export function Sidebar() {
           })}
         </nav>
 
+        {/* Footer */}
         <div className="border-t border-gray-200 p-3 space-y-2">
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="flex items-center justify-center w-full py-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {collapsed ? (
               <ChevronRight className="w-4 h-4" />
@@ -122,18 +131,14 @@ export function Sidebar() {
             )}
           </button>
 
-          <div
-            className={cn(
-              "flex items-center gap-3 px-3 py-2 rounded-lg",
-              collapsed && "justify-center px-0"
-            )}
-          >
-            <Avatar className="h-8 w-8">
-              <AvatarFallback className="text-xs bg-blue-100 text-blue-700">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
-            {!collapsed && (
+          {/* User section - expanded */}
+          {!collapsed && (
+            <div className="flex items-center gap-3 px-3 py-2 rounded-lg">
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className="text-xs bg-blue-100 text-blue-700">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-900 truncate">
                   {session?.user?.name || "User"}
@@ -142,16 +147,57 @@ export function Sidebar() {
                   {session?.user?.email}
                 </p>
               </div>
-            )}
-            {!collapsed && (
-              <button
-                onClick={() => signOut({ callbackUrl: "/login" })}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
-            )}
-          </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleLogout}
+                    className="text-gray-400 hover:text-red-600 transition-colors"
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  <p>Sign out</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+
+          {/* User section - collapsed */}
+          {collapsed && (
+            <div className="flex flex-col items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="cursor-default">
+                    <Avatar className="h-8 w-8">
+                      <AvatarFallback className="text-xs bg-blue-100 text-blue-700">
+                        {initials}
+                      </AvatarFallback>
+                    </Avatar>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p className="font-medium">{session?.user?.name || "User"}</p>
+                  <p className="text-xs opacity-70">{session?.user?.email}</p>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={handleLogout}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-gray-50 transition-colors"
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right">
+                  <p>Sign out</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
         </div>
       </aside>
     </TooltipProvider>

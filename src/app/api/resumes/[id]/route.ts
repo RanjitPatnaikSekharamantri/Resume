@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
 export async function DELETE(
@@ -8,14 +7,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const { id } = await params;
     const resume = await prisma.baseResume.findFirst({
-      where: { id, userId: session.user.id },
+      where: { id, userId: userId! },
     });
 
     if (!resume) {
@@ -28,8 +25,8 @@ export async function DELETE(
     await prisma.baseResume.delete({ where: { id } });
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Delete resume error:", error);
+  } catch (err) {
+    console.error("Delete resume error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -42,16 +39,14 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const { id } = await params;
     const body = await req.json();
 
     const resume = await prisma.baseResume.findFirst({
-      where: { id, userId: session.user.id },
+      where: { id, userId: userId! },
     });
 
     if (!resume) {
@@ -67,8 +62,8 @@ export async function PATCH(
     });
 
     return NextResponse.json(updated);
-  } catch (error) {
-    console.error("Update resume error:", error);
+  } catch (err) {
+    console.error("Update resume error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }

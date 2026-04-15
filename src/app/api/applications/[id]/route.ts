@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(
@@ -8,14 +7,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const { id } = await params;
     const application = await prisma.application.findFirst({
-      where: { id, userId: session.user.id },
+      where: { id, userId: userId! },
       include: {
         resumeVersions: {
           orderBy: { version: "desc" },
@@ -34,8 +31,8 @@ export async function GET(
     }
 
     return NextResponse.json(application);
-  } catch (error) {
-    console.error("Get application error:", error);
+  } catch (err) {
+    console.error("Get application error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -48,16 +45,14 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const { id } = await params;
     const body = await req.json();
 
     const existing = await prisma.application.findFirst({
-      where: { id, userId: session.user.id },
+      where: { id, userId: userId! },
     });
 
     if (!existing) {
@@ -87,8 +82,8 @@ export async function PATCH(
     }
 
     return NextResponse.json(application);
-  } catch (error) {
-    console.error("Update application error:", error);
+  } catch (err) {
+    console.error("Update application error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
@@ -101,14 +96,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
 
     const { id } = await params;
     const existing = await prisma.application.findFirst({
-      where: { id, userId: session.user.id },
+      where: { id, userId: userId! },
     });
 
     if (!existing) {
@@ -121,8 +114,8 @@ export async function DELETE(
     await prisma.application.delete({ where: { id } });
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error("Delete application error:", error);
+  } catch (err) {
+    console.error("Delete application error:", err);
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 }
