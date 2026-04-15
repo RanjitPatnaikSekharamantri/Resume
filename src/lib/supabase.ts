@@ -1,33 +1,101 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+export const RESUME_BUCKET = "resumes";
 
-export const supabase = createClient(supabaseUrl, supabaseServiceKey);
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+const ALLOWED_EXTENSIONS = [".pdf", ".docx"];
 
-export async function uploadFile(
-  bucket: string,
-  path: string,
-  file: Buffer,
+let _supabase: SupabaseClient | null = null;
+
+function getSupabase(): SupabaseClient {
+  if (_supabase) return _supabase;
+
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    throw new Error(
+      "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+    );
+  }
+
+  _supabase = createClient(url, key);
+  return _supabase;
+}
+
+export { getSupabase as supabase };
+
+export function validateResumeFile(file: { name: string; size: number; type: string }) {
+  if (file.size > MAX_FILE_SIZE) {
+    return { valid: false, error: "File size must be under 10 MB" };
+  }
+
+  const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+  if (!ALLOWED_EXTENSIONS.includes(ext)) {
+    return { valid: false, error: "Only PDF and DOCX files are accepted" };
+  }
+
+  return { valid: true, error: null };
+}
+
+export function buildStoragePath(userId: string, fileName: string): string {
+  const sanitized = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return `${userId}/${Date.now()}-${sanitized}`;
+}
+
+export async function uploadResume(
+  userId: string,
+  fileName: string,
+  fileBuffer: Buffer,
   contentType: string
-) {
+): Promise<{ url: string; path: string }> {
+  const supabase = getSupabase();
+  const storagePath = buildStoragePath(userId, fileName);
+
   const { data, error } = await supabase.storage
-    .from(bucket)
-    .upload(path, file, {
+    .from(RESUME_BUCKET)
+    .upload(storagePath, fileBuffer, {
       contentType,
-      upsert: true,
+      upsert: false,
     });
 
-  if (error) throw error;
+  if (error) {
+    console.error("Supabase upload error:", error);
+    throw new Error(`Upload failed: ${error.message}`);
+  }
 
   const {
     data: { publicUrl },
-  } = supabase.storage.from(bucket).getPublicUrl(data.path);
+  } = supabase.storage.from(RESUME_BUCKET).getPublicUrl(data.path);
 
-  return publicUrl;
+  return { url: publicUrl, path: data.path };
 }
 
-export async function deleteFile(bucket: string, path: string) {
-  const { error } = await supabase.storage.from(bucket).remove([path]);
-  if (error) throw error;
+export async function deleteResume(storagePath: string): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase.storage
+    .from(RESUME_BUCKET)
+    .remove([storagePath]);
+
+  if (error) {
+    console.error("Supabase delete error:", error);
+    throw new Error(`Delete failed: ${error.message}`);
+  }
+}
+
+export async function getSignedDownloadUrl(
+  storagePath: string,
+  expiresIn = 60
+): Promise<string> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase.storage
+    .from(RESUME_BUCKET)
+    .createSignedUrl(storagePath, expiresIn);
+
+  if (error) {
+    console.error("Supabase signed URL error:", error);
+    throw new Error(`Could not generate download link: ${error.message}`);
+  }
+
+  return data.signedUrl;
 }
