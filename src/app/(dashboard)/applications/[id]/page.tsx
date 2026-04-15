@@ -6,6 +6,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { ApplicationForm, ApplicationFormData } from "@/components/applications/application-form";
 import { CoverLetterSection } from "@/components/applications/cover-letter-section";
+import { ResumeVersionSection } from "@/components/applications/resume-version-section";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -62,9 +63,11 @@ interface ResumeVersion {
   version: number;
   fileName: string;
   fileUrl: string;
+  content: string | null;
   isTailored: boolean;
   createdAt: string;
-  baseResume?: { name: string } | null;
+  baseResumeId: string | null;
+  baseResume?: { id: string; name: string } | null;
 }
 
 interface CoverLetter {
@@ -507,67 +510,15 @@ export default function ApplicationDetailPage() {
             <TabsContent value="documents">
               <div className="space-y-4">
                 {/* Resume Versions */}
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                    <CardTitle className="text-sm font-semibold">
-                      Resume Versions
-                    </CardTitle>
-                    <Link href="/ai-studio">
-                      <Button variant="outline" size="sm" className="h-8">
-                        <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                        Generate Tailored
-                      </Button>
-                    </Link>
-                  </CardHeader>
-                  <CardContent>
-                    {app.resumeVersions.length === 0 ? (
-                      <div className="text-center py-8">
-                        <FileText className="w-6 h-6 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">
-                          No resume versions yet
-                        </p>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          Generate a tailored resume from AI Studio
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {app.resumeVersions.map((rv) => (
-                          <div
-                            key={rv.id}
-                            className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50/50 transition-colors"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div
-                                className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                                  rv.isTailored
-                                    ? "bg-blue-50 text-blue-600"
-                                    : "bg-gray-100 text-gray-500"
-                                }`}
-                              >
-                                <FileText className="w-4 h-4" />
-                              </div>
-                              <div>
-                                <p className="text-sm font-medium text-gray-900">
-                                  {rv.isTailored
-                                    ? `Tailored Resume v${rv.version}`
-                                    : `Base Resume v${rv.version}`}
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  {formatDate(rv.createdAt)}
-                                  {rv.baseResume && ` · From: ${rv.baseResume.name}`}
-                                </p>
-                              </div>
-                            </div>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <Download className="w-4 h-4" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                <ResumeVersionSection
+                  applicationId={app.id}
+                  jobTitle={app.jobTitle}
+                  company={app.company}
+                  resumeVersions={app.resumeVersions}
+                  resumes={resumes}
+                  onRefresh={fetchApp}
+                  onToast={handleCoverLetterToast}
+                />
 
                 {/* Cover Letters */}
                 <CoverLetterSection

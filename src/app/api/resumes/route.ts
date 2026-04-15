@@ -11,6 +11,15 @@ export async function GET() {
     const resumes = await prisma.baseResume.findMany({
       where: { userId: userId! },
       orderBy: { updatedAt: "desc" },
+      include: {
+        resumeVersions: {
+          select: {
+            id: true,
+            applicationId: true,
+            application: { select: { jobTitle: true, company: true } },
+          },
+        },
+      },
     });
 
     return NextResponse.json(resumes);

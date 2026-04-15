@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -43,6 +44,7 @@ import {
   Loader2,
   X,
   CloudUpload,
+  Briefcase,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
@@ -71,6 +73,11 @@ const ALLOWED_EXTENSIONS = [".pdf", ".docx"];
 
 // ── types ──
 
+interface LinkedApplication {
+  applicationId: string;
+  application: { jobTitle: string; company: string };
+}
+
 interface BaseResume {
   id: string;
   name: string;
@@ -80,6 +87,7 @@ interface BaseResume {
   roleCategory: string | null;
   createdAt: string;
   updatedAt: string;
+  resumeVersions?: LinkedApplication[];
 }
 
 type ToastData = { message: string; variant: "success" | "error" } | null;
@@ -741,9 +749,32 @@ function ResumeCard({
         <h3 className="text-sm font-semibold text-gray-900 mb-0.5 line-clamp-1">
           {resume.name}
         </h3>
-        <p className="text-xs text-gray-500 mb-3 line-clamp-1">
+        <p className="text-xs text-gray-500 mb-2 line-clamp-1">
           {resume.fileName}
         </p>
+
+        {/* Linked applications */}
+        {resume.resumeVersions && resume.resumeVersions.length > 0 && (
+          <div className="mb-3 space-y-1">
+            {resume.resumeVersions.slice(0, 3).map((rv) => (
+              <Link
+                key={rv.applicationId}
+                href={`/applications/${rv.applicationId}`}
+                className="flex items-center gap-1.5 text-[11px] text-blue-600 hover:text-blue-700 transition-colors group/link"
+              >
+                <Briefcase className="w-3 h-3 shrink-0" />
+                <span className="truncate group-hover/link:underline">
+                  {rv.application.jobTitle} at {rv.application.company}
+                </span>
+              </Link>
+            ))}
+            {resume.resumeVersions.length > 3 && (
+              <p className="text-[11px] text-gray-400">
+                +{resume.resumeVersions.length - 3} more
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">

@@ -32,7 +32,7 @@ export async function GET(
       include: {
         resumeVersions: {
           orderBy: { version: "desc" },
-          include: { baseResume: { select: { name: true } } },
+          include: { baseResume: { select: { id: true, name: true } } },
         },
         coverLetters: { orderBy: { version: "desc" } },
         activities: { orderBy: { createdAt: "desc" } },

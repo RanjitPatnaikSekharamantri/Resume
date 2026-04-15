@@ -207,21 +207,46 @@ export default function AIStudioPage() {
 
       const app = await res.json();
 
-      if (generatedCoverLetter) {
-        await fetch("/api/cover-letters", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            applicationId: app.id,
-            jobTitle: role.trim(),
-            company: company.trim(),
-            content: generatedCoverLetter,
-          }),
-        });
+      const promises: Promise<Response>[] = [];
+
+      if (generatedResume) {
+        promises.push(
+          fetch("/api/resume-versions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              applicationId: app.id,
+              baseResumeId: selectedResume || undefined,
+              content: generatedResume,
+              isTailored: true,
+            }),
+          })
+        );
       }
 
+      if (generatedCoverLetter) {
+        promises.push(
+          fetch("/api/cover-letters", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              applicationId: app.id,
+              jobTitle: role.trim(),
+              company: company.trim(),
+              content: generatedCoverLetter,
+            }),
+          })
+        );
+      }
+
+      await Promise.all(promises);
+
       setSavedAppId(app.id);
-      setToast({ message: "Application created with generated documents", variant: "success" });
+      const docCount = promises.length;
+      setToast({
+        message: `Application created with ${docCount} document${docCount !== 1 ? "s" : ""}`,
+        variant: "success",
+      });
     } catch {
       setToast({ message: "Save failed", variant: "error" });
     } finally {
