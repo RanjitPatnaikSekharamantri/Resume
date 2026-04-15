@@ -1,6 +1,22 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { APPLICATION_STATUSES } from "@/lib/utils";
+
+const ALLOWED_FIELDS = new Set([
+  "jobTitle",
+  "company",
+  "location",
+  "salary",
+  "postedDate",
+  "jobDescription",
+  "jobUrl",
+  "source",
+  "notes",
+  "status",
+  "matchScore",
+  "order",
+]);
 
 export async function GET(
   _req: Request,
@@ -62,21 +78,60 @@ export async function PATCH(
       );
     }
 
+    // Whitelist and sanitize
+    const data: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(body)) {
+      if (!ALLOWED_FIELDS.has(key)) continue;
+
+      if (key === "status") {
+        if (!APPLICATION_STATUSES.includes(value as (typeof APPLICATION_STATUSES)[number])) {
+          return NextResponse.json(
+            { error: `Invalid status: ${value}` },
+            { status: 400 }
+          );
+        }
+        data.status = value;
+      } else if (key === "postedDate") {
+        data.postedDate = value ? new Date(value as string) : null;
+      } else if (key === "matchScore" || key === "order") {
+        data[key] = value != null ? Number(value) : null;
+      } else {
+        data[key] = value != null ? String(value).slice(0, key === "jobDescription" || key === "notes" ? 10000 : 500) : null;
+      }
+    }
+
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json(
+        { error: "No valid fields to update" },
+        { status: 400 }
+      );
+    }
+
     const application = await prisma.application.update({
       where: { id },
-      data: body,
+      data,
     });
 
-    if (body.status && body.status !== existing.status) {
+    if (data.status && data.status !== existing.status) {
       await prisma.activity.create({
         data: {
           applicationId: id,
           type: "status_change",
-          description: `Status changed from ${existing.status} to ${body.status}`,
+          description: `Status changed to ${data.status}`,
           metadata: JSON.stringify({
             from: existing.status,
-            to: body.status,
+            to: data.status,
           }),
+        },
+      });
+    }
+
+    if (data.notes !== undefined && data.notes !== existing.notes) {
+      await prisma.activity.create({
+        data: {
+          applicationId: id,
+          type: "notes_updated",
+          description: "Notes updated",
         },
       });
     }
