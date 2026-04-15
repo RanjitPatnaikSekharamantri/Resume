@@ -12,110 +12,144 @@ export async function GET() {
       select: {
         id: true,
         status: true,
+        company: true,
         createdAt: true,
         updatedAt: true,
-        company: true,
       },
     });
 
+    const total = applications.length;
+
+    // ── status counts ──
     const statusCounts: Record<string, number> = {};
     for (const app of applications) {
       statusCounts[app.status] = (statusCounts[app.status] || 0) + 1;
     }
 
-    const weeklyActivity: Record<string, number> = {};
+    // ── stage groups ──
+    const saved = statusCounts["saved"] || 0;
+    const notApplied = statusCounts["not_applied"] || 0;
+    const applied = total - saved - notApplied;
+    const screeningPlus = applications.filter((a) =>
+      ["screening", "interview", "offer"].includes(a.status)
+    ).length;
+    const interviewPlus = applications.filter((a) =>
+      ["interview", "offer"].includes(a.status)
+    ).length;
+    const offers = statusCounts["offer"] || 0;
+    const rejected = statusCounts["rejected"] || 0;
+    const active = applications.filter(
+      (a) => !["rejected", "archived"].includes(a.status)
+    ).length;
+
+    // ── weekly activity (last 12 weeks with real date labels) ──
     const now = new Date();
+    const weeklyActivity: { name: string; applications: number; start: Date }[] = [];
+
     for (let i = 11; i >= 0; i--) {
-      const weekKey = `Week ${12 - i}`;
-      weeklyActivity[weekKey] = 0;
+      const weekStart = new Date(now);
+      weekStart.setDate(weekStart.getDate() - i * 7);
+      weekStart.setHours(0, 0, 0, 0);
+      const dayOfWeek = weekStart.getDay();
+      weekStart.setDate(weekStart.getDate() - dayOfWeek);
+
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 7);
+
+      const label = weekStart.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+
+      const count = applications.filter((a) => {
+        const d = new Date(a.createdAt);
+        return d >= weekStart && d < weekEnd;
+      }).length;
+
+      weeklyActivity.push({ name: label, applications: count, start: weekStart });
     }
 
+    // Deduplicate weeks that may overlap
+    const seen = new Set<string>();
+    const dedupedWeekly = weeklyActivity.filter((w) => {
+      if (seen.has(w.name)) return false;
+      seen.add(w.name);
+      return true;
+    });
+
+    // ── conversion rates ──
+    const appToScreening =
+      applied > 0 ? Math.round((screeningPlus / applied) * 100) : 0;
+    const screeningToInterview =
+      screeningPlus > 0
+        ? Math.round((interviewPlus / screeningPlus) * 100)
+        : 0;
+    const interviewToOffer =
+      interviewPlus > 0 ? Math.round((offers / interviewPlus) * 100) : 0;
+    const responseRate =
+      applied > 0
+        ? Math.round(
+            (applications.filter((a) =>
+              ["screening", "interview", "offer", "rejected"].includes(a.status)
+            ).length /
+              applied) *
+              100
+          )
+        : 0;
+
+    // ── top companies ──
+    const companyCounts: Record<string, number> = {};
     for (const app of applications) {
-      const weeksAgo = Math.floor(
-        (now.getTime() - new Date(app.createdAt).getTime()) /
-          (7 * 24 * 60 * 60 * 1000)
-      );
-      if (weeksAgo < 12) {
-        const weekKey = `Week ${12 - weeksAgo}`;
-        weeklyActivity[weekKey] = (weeklyActivity[weekKey] || 0) + 1;
-      }
+      companyCounts[app.company] = (companyCounts[app.company] || 0) + 1;
     }
+    const topCompanies = Object.entries(companyCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([company, count]) => ({ company, count }));
 
-    const totalApps = applications.length;
-    const appliedCount = applications.filter(
-      (a) => !["not_applied", "saved"].includes(a.status)
-    ).length;
-    const interviewCount = applications.filter(
-      (a) => a.status === "interview"
-    ).length;
-    const offerCount = applications.filter(
-      (a) => a.status === "offer"
-    ).length;
-
-    const conversionRates = {
-      applicationToScreening:
-        totalApps > 0
-          ? Math.round(
-              (applications.filter((a) =>
-                ["screening", "interview", "offer"].includes(a.status)
-              ).length /
-                Math.max(appliedCount, 1)) *
-                100
-            )
-          : 0,
-      screeningToInterview:
-        appliedCount > 0
-          ? Math.round(
-              (applications.filter((a) =>
-                ["interview", "offer"].includes(a.status)
-              ).length /
-                Math.max(
-                  applications.filter((a) =>
-                    ["screening", "interview", "offer"].includes(a.status)
-                  ).length,
-                  1
-                )) *
-                100
-            )
-          : 0,
-      interviewToOffer:
-        interviewCount > 0
-          ? Math.round(
-              (offerCount / Math.max(interviewCount + offerCount, 1)) * 100
-            )
-          : 0,
-    };
+    // ── status distribution (sorted by pipeline order) ──
+    const statusOrder = [
+      "not_applied",
+      "saved",
+      "applied",
+      "screening",
+      "interview",
+      "offer",
+      "rejected",
+      "archived",
+    ];
+    const statusDistribution = statusOrder
+      .filter((s) => (statusCounts[s] || 0) > 0)
+      .map((s) => ({ name: s, value: statusCounts[s] || 0 }));
 
     return NextResponse.json({
-      statusDistribution: Object.entries(statusCounts).map(
-        ([status, count]) => ({
-          name: status,
-          value: count,
-        })
-      ),
-      weeklyActivity: Object.entries(weeklyActivity).map(([week, count]) => ({
-        name: week,
+      statusDistribution,
+      weeklyActivity: dedupedWeekly.map(({ name, applications: count }) => ({
+        name,
         applications: count,
       })),
       funnel: [
-        { stage: "Total", count: totalApps },
-        { stage: "Applied", count: appliedCount },
-        {
-          stage: "Screening",
-          count: applications.filter((a) =>
-            ["screening", "interview", "offer"].includes(a.status)
-          ).length,
-        },
-        { stage: "Interview", count: interviewCount + offerCount },
-        { stage: "Offer", count: offerCount },
+        { stage: "Total", count: total },
+        { stage: "Applied", count: applied },
+        { stage: "Screening", count: screeningPlus },
+        { stage: "Interview", count: interviewPlus },
+        { stage: "Offer", count: offers },
       ],
-      conversionRates,
-      totalApplications: totalApps,
-      activeApplications: applications.filter(
-        (a) => !["rejected", "archived"].includes(a.status)
-      ).length,
-      interviewRate: conversionRates.screeningToInterview,
-      offerRate: conversionRates.interviewToOffer,
+      conversionRates: {
+        applicationToScreening: appToScreening,
+        screeningToInterview,
+        interviewToOffer,
+        responseRate,
+      },
+      totalApplications: total,
+      activeApplications: active,
+      appliedCount: applied,
+      rejectedCount: rejected,
+      offerCount: offers,
+      interviewRate: screeningToInterview,
+      offerRate: interviewToOffer,
+      responseRate,
+      topCompanies,
     });
   } catch (err) {
     console.error("Get analytics error:", err);
