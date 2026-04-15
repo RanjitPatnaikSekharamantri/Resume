@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { ApplicationForm, ApplicationFormData } from "@/components/applications/application-form";
+import { CoverLetterSection } from "@/components/applications/cover-letter-section";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,9 +47,6 @@ import {
   FilePlus,
   RefreshCw,
   StickyNote,
-  ChevronDown,
-  ChevronUp,
-  Copy,
 } from "lucide-react";
 import {
   formatDate,
@@ -158,11 +156,8 @@ export default function ApplicationDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // cover letter expand
-  const [expandedCl, setExpandedCl] = useState<string | null>(null);
-
-  // generating
-  const [generatingCl, setGeneratingCl] = useState(false);
+  // resumes for cover letter generation
+  const [resumes, setResumes] = useState<{ id: string; name: string; roleCategory: string | null }[]>([]);
 
   const fetchApp = useCallback(async () => {
     try {
@@ -184,6 +179,10 @@ export default function ApplicationDetailPage() {
 
   useEffect(() => {
     fetchApp();
+    fetch("/api/resumes")
+      .then((r) => r.json())
+      .then((data) => { if (Array.isArray(data)) setResumes(data); })
+      .catch(() => {});
   }, [fetchApp]);
 
   const notesDirty = notes !== savedNotes;
@@ -248,40 +247,8 @@ export default function ApplicationDetailPage() {
     }
   };
 
-  const handleGenerateCoverLetter = async () => {
-    if (!app) return;
-    setGeneratingCl(true);
-    try {
-      const genRes = await fetch("/api/ai/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jobDescription: app.jobDescription || "",
-          role: app.jobTitle,
-          company: app.company,
-          type: "cover_letter",
-        }),
-      });
-      const genData = await genRes.json();
-
-      await fetch("/api/cover-letters", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          applicationId: app.id,
-          jobTitle: app.jobTitle,
-          company: app.company,
-          content: genData.content,
-        }),
-      });
-
-      setToast({ message: "Cover letter generated", variant: "success" });
-      fetchApp();
-    } catch {
-      setToast({ message: "Generation failed", variant: "error" });
-    } finally {
-      setGeneratingCl(false);
-    }
+  const handleCoverLetterToast = (msg: string, variant: "success" | "error") => {
+    setToast({ message: msg, variant });
   };
 
   // ── loading ──
@@ -603,99 +570,16 @@ export default function ApplicationDetailPage() {
                 </Card>
 
                 {/* Cover Letters */}
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                    <CardTitle className="text-sm font-semibold">
-                      Cover Letters
-                    </CardTitle>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8"
-                      onClick={handleGenerateCoverLetter}
-                      disabled={generatingCl}
-                    >
-                      {generatingCl ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                          Generate
-                        </>
-                      )}
-                    </Button>
-                  </CardHeader>
-                  <CardContent>
-                    {app.coverLetters.length === 0 ? (
-                      <div className="text-center py-8">
-                        <FileText className="w-6 h-6 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">
-                          No cover letters yet
-                        </p>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          Click Generate to create one from the job description
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {app.coverLetters.map((cl) => (
-                          <div
-                            key={cl.id}
-                            className="rounded-lg border border-gray-100 overflow-hidden"
-                          >
-                            <button
-                              onClick={() =>
-                                setExpandedCl(expandedCl === cl.id ? null : cl.id)
-                              }
-                              className="w-full flex items-center justify-between p-3 hover:bg-gray-50/50 transition-colors"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-                                  <FileText className="w-4 h-4" />
-                                </div>
-                                <div className="text-left">
-                                  <p className="text-sm font-medium text-gray-900">
-                                    Cover Letter v{cl.version}
-                                  </p>
-                                  <p className="text-xs text-gray-500">
-                                    {formatDate(cl.createdAt)}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                <span
-                                  className="p-1 rounded hover:bg-gray-200 transition-colors"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    navigator.clipboard.writeText(cl.content);
-                                    setToast({ message: "Copied to clipboard", variant: "success" });
-                                  }}
-                                >
-                                  <Copy className="w-3.5 h-3.5 text-gray-400" />
-                                </span>
-                                {expandedCl === cl.id ? (
-                                  <ChevronUp className="w-4 h-4 text-gray-400" />
-                                ) : (
-                                  <ChevronDown className="w-4 h-4 text-gray-400" />
-                                )}
-                              </div>
-                            </button>
-                            {expandedCl === cl.id && (
-                              <div className="border-t border-gray-100 p-4 bg-gray-50/30">
-                                <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                                  {cl.content}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+                <CoverLetterSection
+                  applicationId={app.id}
+                  jobTitle={app.jobTitle}
+                  company={app.company}
+                  jobDescription={app.jobDescription || ""}
+                  coverLetters={app.coverLetters}
+                  resumes={resumes}
+                  onRefresh={fetchApp}
+                  onToast={handleCoverLetterToast}
+                />
               </div>
             </TabsContent>
           </Tabs>
