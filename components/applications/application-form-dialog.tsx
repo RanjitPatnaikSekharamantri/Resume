@@ -24,7 +24,18 @@ export function ApplicationFormDialog() {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    jobTitle: string;
+    company: string;
+    location: string;
+    salary: string;
+    postedDate: string;
+    jobDescription: string;
+    jobUrl: string;
+    source: string;
+    notes: string;
+    status: ApplicationStatus;
+  }>({
     jobTitle: "",
     company: "",
     location: "",

@@ -26,4 +26,4 @@ export const profileSchema = z.object({
 export const profileUpdateSchema = profileSchema;
 
 export type ProfileInput = z.infer<typeof profileSchema>;
-export type ProfileUpdateInput = ProfileInput;
+export type ProfileUpdateInput = z.input<typeof profileUpdateSchema>;

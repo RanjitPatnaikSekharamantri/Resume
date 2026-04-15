@@ -2,11 +2,8 @@ import { ApplicationStatus } from "@prisma/client";
 import { ZodError } from "zod";
 
 import { requireUser } from "@/lib/auth/session";
-import {
-  unauthorized,
-  createApplication,
-  getApplicationDetail,
-} from "@/lib/services/application.service";
+import { unauthorized } from "@/lib/http";
+import { createApplication, getApplicationDetail } from "@/lib/services/application.service";
 import { generateCoverLetter } from "@/lib/services/cover-letter.service";
 import { prisma } from "@/lib/prisma";
 import { tailorResumeText } from "@/lib/services/resume-engine.service";

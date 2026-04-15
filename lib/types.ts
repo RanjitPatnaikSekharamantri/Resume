@@ -16,7 +16,7 @@ export type MaskedProvider = {
   provider: AIProviderType;
   keyHint: string | null;
   isActive: boolean;
-  updatedAt: string;
+  updatedAt: string | Date;
 };
 
 export type KanbanCard = {

@@ -21,7 +21,6 @@ const envSchema = z.object({
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
-  // eslint-disable-next-line no-console
   console.warn(
     "Environment validation warnings:",
     parsed.error.flatten().fieldErrors,

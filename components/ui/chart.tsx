@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { type TooltipProps } from "recharts";
+import { type TooltipContentProps } from "recharts";
 
 import { cn } from "@/lib/utils";
 
@@ -42,7 +42,7 @@ export function ChartTooltipContent({
   active,
   payload,
   label,
-}: TooltipProps<number, string>) {
+}: TooltipContentProps<number, string>) {
   const config = React.useContext(ChartContext);
   if (!active || !payload?.length || !config) {
     return null;

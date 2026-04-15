@@ -54,3 +54,5 @@ export const createCoverLetterSchema = z.object({
 export type ApplicationInput = z.infer<typeof applicationInputSchema>;
 export type UpdateApplicationInput = z.infer<typeof updateApplicationInputSchema>;
 export type ApplicationQuery = z.infer<typeof applicationQuerySchema>;
+export type CreateApplicationInput = ApplicationInput;
+export type ListApplicationsInput = ApplicationQuery;

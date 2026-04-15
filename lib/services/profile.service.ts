@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { ProfileUpdateInput } from "@/lib/validations/profile";
+import type { Prisma } from "@prisma/client";
 
 export async function getProfile(userId: string) {
   const [user, profile] = await Promise.all([
@@ -16,6 +17,13 @@ export async function getProfile(userId: string) {
 }
 
 export async function upsertProfile(userId: string, payload: ProfileUpdateInput) {
+  const preferences = (payload.preferences ?? undefined) as
+    | Prisma.InputJsonValue
+    | undefined;
+  const equalOpportunity = (payload.equalOpportunity ?? undefined) as
+    | Prisma.InputJsonValue
+    | undefined;
+
   await prisma.user.update({
     where: { id: userId },
     data: {
@@ -33,8 +41,8 @@ export async function upsertProfile(userId: string, payload: ProfileUpdateInput)
       linkedin: payload.linkedin,
       links: payload.links ?? [],
       workAuthorization: payload.workAuthorization,
-      equalOpportunity: payload.equalOpportunity ?? undefined,
-      preferences: payload.preferences ?? undefined,
+      equalOpportunity,
+      preferences,
       summary: payload.summary,
     },
     update: {
@@ -43,8 +51,8 @@ export async function upsertProfile(userId: string, payload: ProfileUpdateInput)
       linkedin: payload.linkedin,
       links: payload.links ?? [],
       workAuthorization: payload.workAuthorization,
-      equalOpportunity: payload.equalOpportunity ?? undefined,
-      preferences: payload.preferences ?? undefined,
+      equalOpportunity,
+      preferences,
       summary: payload.summary,
     },
   });
