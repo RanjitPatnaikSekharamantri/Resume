@@ -35,6 +35,8 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { EnhanceResume } from "@/components/ai-studio/enhance-resume";
+import { MatchScoreCard, ScoreBadge } from "@/components/applications/match-score-card";
+import type { ScoreBreakdown } from "@/lib/match-scoring";
 
 // ── types ──
 
@@ -108,6 +110,10 @@ export default function AIStudioPage() {
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState("");
 
+  // Score state
+  const [beforeScore, setBeforeScore] = useState<ScoreBreakdown | null>(null);
+  const [afterScore, setAfterScore] = useState<ScoreBreakdown | null>(null);
+
   // Save state
   const [saving, setSaving] = useState(false);
   const [savedAppId, setSavedAppId] = useState<string | null>(null);
@@ -173,6 +179,38 @@ export default function AIStudioPage() {
         setGeneratedResume(data.resume || "");
         setGeneratedCoverLetter(data.coverLetter || "");
         setActiveTab("resume");
+      }
+
+      // Calculate before/after match scores
+      try {
+        const beforeRes = await fetch("/api/ai/match-score", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jobDescription: jobDescription.trim(),
+            resumeText: role.trim(),
+            jobTitle: role.trim(),
+            company: company.trim(),
+          }),
+        });
+        if (beforeRes.ok) setBeforeScore(await beforeRes.json());
+
+        const genResume = generateMode === "cover_letter" ? "" : (data.resume || data.content || "");
+        if (genResume) {
+          const afterRes = await fetch("/api/ai/match-score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jobDescription: jobDescription.trim(),
+              resumeText: genResume,
+              jobTitle: role.trim(),
+              company: company.trim(),
+            }),
+          });
+          if (afterRes.ok) setAfterScore(await afterRes.json());
+        }
+      } catch {
+        // scoring is non-critical
       }
 
       setToast({ message: "Documents generated", variant: "success" });
@@ -273,6 +311,8 @@ export default function AIStudioPage() {
     setGenError("");
     setSavedAppId(null);
     setGenerateMode("both");
+    setBeforeScore(null);
+    setAfterScore(null);
   };
 
   // ── resume badge for the selected one ──
@@ -549,6 +589,52 @@ export default function AIStudioPage() {
                 <span className="font-medium text-gray-600">{company}</span>
               </div>
             </div>
+          )}
+
+          {/* Score comparison */}
+          {(beforeScore || afterScore) && (
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    Match Score
+                  </p>
+                  {afterScore && beforeScore && afterScore.overallScore > beforeScore.overallScore && (
+                    <Badge variant="success" className="text-[10px]">
+                      +{afterScore.overallScore - beforeScore.overallScore}% improvement
+                    </Badge>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  {beforeScore && (
+                    <div className="rounded-lg border border-gray-200 p-3">
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">Before (Profile)</p>
+                      <MatchScoreCard
+                        overallScore={beforeScore.overallScore}
+                        skillsMatch={beforeScore.skillsMatch}
+                        experienceMatch={beforeScore.experienceMatch}
+                        keywordCoverage={beforeScore.keywordCoverage}
+                        domainMatch={beforeScore.domainMatch}
+                        compact
+                      />
+                    </div>
+                  )}
+                  {afterScore && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3">
+                      <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">After (Generated)</p>
+                      <MatchScoreCard
+                        overallScore={afterScore.overallScore}
+                        skillsMatch={afterScore.skillsMatch}
+                        experienceMatch={afterScore.experienceMatch}
+                        keywordCoverage={afterScore.keywordCoverage}
+                        domainMatch={afterScore.domainMatch}
+                        compact
+                      />
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           )}
 
           {/* Output tabs */}

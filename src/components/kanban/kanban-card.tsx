@@ -4,7 +4,6 @@ import React from "react";
 import Link from "next/link";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Badge } from "@/components/ui/badge";
 import {
   FileText,
   StickyNote,
@@ -13,6 +12,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ScoreBadge } from "@/components/applications/match-score-card";
 
 export interface KanbanCardData {
   id: string;
@@ -104,9 +104,7 @@ export function KanbanCard({ card, overlay }: KanbanCardProps) {
           </span>
         )}
         {card.matchScore != null && card.matchScore > 0 && (
-          <Badge variant="info" className="text-[10px] px-1.5 py-0">
-            {card.matchScore}%
-          </Badge>
+          <ScoreBadge score={card.matchScore} />
         )}
         <div className="flex items-center gap-1.5 ml-auto shrink-0">
           {hasResume && (

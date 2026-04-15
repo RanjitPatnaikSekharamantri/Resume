@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ApplicationForm, ApplicationFormData } from "@/components/applications/application-form";
 import { CoverLetterSection } from "@/components/applications/cover-letter-section";
 import { ResumeVersionSection } from "@/components/applications/resume-version-section";
+import { MatchScoreCard } from "@/components/applications/match-score-card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,6 +98,10 @@ interface ApplicationDetail {
   notes?: string;
   status: string;
   matchScore?: number;
+  skillsMatch?: number;
+  experienceMatch?: number;
+  keywordCoverage?: number;
+  domainMatch?: number;
   createdAt: string;
   updatedAt: string;
   resumeVersions: ResumeVersion[];
@@ -538,6 +543,16 @@ export default function ApplicationDetailPage() {
 
         {/* Sidebar */}
         <div className="space-y-4">
+          {app.matchScore != null && (
+            <MatchScoreCard
+              overallScore={app.matchScore}
+              skillsMatch={app.skillsMatch}
+              experienceMatch={app.experienceMatch}
+              keywordCoverage={app.keywordCoverage}
+              domainMatch={app.domainMatch}
+            />
+          )}
+
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Details</CardTitle>

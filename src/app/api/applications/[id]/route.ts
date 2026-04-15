@@ -15,6 +15,10 @@ const ALLOWED_FIELDS = new Set([
   "notes",
   "status",
   "matchScore",
+  "skillsMatch",
+  "experienceMatch",
+  "keywordCoverage",
+  "domainMatch",
   "order",
 ]);
 
@@ -93,7 +97,7 @@ export async function PATCH(
         data.status = value;
       } else if (key === "postedDate") {
         data.postedDate = value ? new Date(value as string) : null;
-      } else if (key === "matchScore" || key === "order") {
+      } else if (["matchScore", "skillsMatch", "experienceMatch", "keywordCoverage", "domainMatch", "order"].includes(key)) {
         data[key] = value != null ? Number(value) : null;
       } else {
         data[key] = value != null ? String(value).slice(0, key === "jobDescription" || key === "notes" ? 10000 : 500) : null;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { calculateMatchScore } from "@/lib/match-scoring";
 
 export async function GET() {
   try {
@@ -53,6 +54,43 @@ export async function POST(req: Request) {
       );
     }
 
+    // Auto-calculate match score if JD is present
+    let scoreData: {
+      matchScore?: number;
+      skillsMatch?: number;
+      experienceMatch?: number;
+      keywordCoverage?: number;
+      domainMatch?: number;
+    } = {};
+
+    if (jobDescription) {
+      const profile = await prisma.profile.findUnique({
+        where: { userId: userId! },
+        include: { user: { select: { name: true } } },
+      });
+      const resumeProxy = [
+        profile?.summary || "",
+        profile?.preferredRole || "",
+        jobTitle,
+      ].filter(Boolean).join(" ");
+
+      if (resumeProxy.length > 10) {
+        const score = calculateMatchScore({
+          jobDescription,
+          resumeText: resumeProxy,
+          jobTitle,
+          company,
+        });
+        scoreData = {
+          matchScore: score.overallScore,
+          skillsMatch: score.skillsMatch,
+          experienceMatch: score.experienceMatch,
+          keywordCoverage: score.keywordCoverage,
+          domainMatch: score.domainMatch,
+        };
+      }
+    }
+
     const application = await prisma.application.create({
       data: {
         userId: userId!,
@@ -66,7 +104,7 @@ export async function POST(req: Request) {
         source,
         notes,
         status: status || "not_applied",
-        matchScore,
+        ...scoreData,
       },
     });
 
