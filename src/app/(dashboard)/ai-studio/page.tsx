@@ -31,8 +31,10 @@ import {
   Briefcase,
   ArrowRight,
   Wand2,
+  Wrench,
 } from "lucide-react";
 import Link from "next/link";
+import { EnhanceResume } from "@/components/ai-studio/enhance-resume";
 
 // ── types ──
 
@@ -81,8 +83,13 @@ function Toast({
 
 // ── page ──
 
+type StudioMode = "generate" | "enhance";
+
 export default function AIStudioPage() {
   const router = useRouter();
+
+  // Top-level mode
+  const [studioMode, setStudioMode] = useState<StudioMode>("generate");
 
   // Input state
   const [role, setRole] = useState("");
@@ -253,7 +260,7 @@ export default function AIStudioPage() {
         title="AI Studio"
         description="Generate tailored resumes and cover letters from job descriptions"
         action={
-          hasOutput ? (
+          studioMode === "generate" && hasOutput ? (
             <Button variant="outline" size="sm" onClick={handleReset}>
               <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
               New Session
@@ -262,6 +269,39 @@ export default function AIStudioPage() {
         }
       />
 
+      {/* Mode toggle */}
+      <div className="flex items-center gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
+        <button
+          onClick={() => setStudioMode("generate")}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+            studioMode === "generate"
+              ? "bg-white shadow-sm text-gray-900"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Wand2 className="w-3.5 h-3.5" />
+          Generate
+        </button>
+        <button
+          onClick={() => setStudioMode("enhance")}
+          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+            studioMode === "enhance"
+              ? "bg-white shadow-sm text-gray-900"
+              : "text-gray-500 hover:text-gray-700"
+          }`}
+        >
+          <Wrench className="w-3.5 h-3.5" />
+          Enhance Resume
+        </button>
+      </div>
+
+      {studioMode === "enhance" ? (
+        <EnhanceResume
+          resumes={resumes}
+          resumesLoading={resumesLoading}
+          onToast={setToast}
+        />
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* ─── Left Panel: Input ─── */}
         <div className="lg:col-span-2 space-y-4">
@@ -579,6 +619,7 @@ export default function AIStudioPage() {
           </Card>
         </div>
       </div>
+      )}
 
       {toast && <Toast data={toast} onDismiss={() => setToast(null)} />}
     </>
