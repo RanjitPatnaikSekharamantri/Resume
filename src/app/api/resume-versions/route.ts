@@ -1,0 +1,81 @@
+import { NextResponse } from "next/server";
+import { authenticateRequest } from "@/lib/api-auth";
+import { prisma } from "@/lib/prisma";
+
+export async function POST(req: Request) {
+  try {
+    const { error, userId } = await authenticateRequest();
+    if (error) return error;
+
+    const body = await req.json();
+    const { applicationId, baseResumeId, content, isTailored } = body;
+
+    if (!applicationId) {
+      return NextResponse.json(
+        { error: "Application ID is required" },
+        { status: 400 }
+      );
+    }
+
+    const app = await prisma.application.findFirst({
+      where: { id: applicationId, userId: userId! },
+    });
+
+    if (!app) {
+      return NextResponse.json(
+        { error: "Application not found" },
+        { status: 404 }
+      );
+    }
+
+    if (baseResumeId) {
+      const resume = await prisma.baseResume.findFirst({
+        where: { id: baseResumeId, userId: userId! },
+      });
+      if (!resume) {
+        return NextResponse.json(
+          { error: "Base resume not found" },
+          { status: 404 }
+        );
+      }
+    }
+
+    const latestVersion = await prisma.resumeVersion.findFirst({
+      where: { applicationId },
+      orderBy: { version: "desc" },
+    });
+
+    const version = (latestVersion?.version || 0) + 1;
+    const label = isTailored ? "Tailored" : "Base";
+
+    const resumeVersion = await prisma.resumeVersion.create({
+      data: {
+        applicationId,
+        baseResumeId: baseResumeId || null,
+        jobTitle: app.jobTitle,
+        company: app.company,
+        version,
+        fileName: `${label}_Resume_v${version}.docx`,
+        fileUrl: "",
+        content: content ? String(content).slice(0, 50000) : null,
+        isTailored: !!isTailored,
+      },
+    });
+
+    await prisma.activity.create({
+      data: {
+        applicationId,
+        type: "resume_version_created",
+        description: `${label} resume v${version} added`,
+      },
+    });
+
+    return NextResponse.json(resumeVersion, { status: 201 });
+  } catch (err) {
+    console.error("Create resume version error:", err);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
+  }
+}
