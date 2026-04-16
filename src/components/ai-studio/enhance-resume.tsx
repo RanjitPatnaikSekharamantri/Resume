@@ -56,6 +56,14 @@ interface EnhanceResult {
   enhanced: { sections: SectionData[]; text: string };
   resumeName: string;
   fileName: string;
+  engine?: {
+    kind: string;
+    label: string;
+    providerConfigured: boolean;
+    providerName: string | null;
+    providerModel: string | null;
+    note: string;
+  };
 }
 
 type ToastData = { message: string; variant: "success" | "error" };
@@ -64,6 +72,15 @@ interface EnhanceResumeProps {
   resumes: BaseResume[];
   resumesLoading: boolean;
   onToast: (data: ToastData) => void;
+  /** Prefill values from an application context */
+  initialRole?: string;
+  initialCompany?: string;
+  initialJobDescription?: string;
+  initialResumeId?: string;
+  /** Application ID — if set, "Save" attaches to this app instead of creating one */
+  applicationId?: string;
+  /** Current active match score on the application, shown as context. */
+  currentScore?: number | null;
 }
 
 const SECTION_LABELS: Record<string, string> = {
@@ -79,11 +96,31 @@ const SECTION_LABELS: Record<string, string> = {
 
 const MODIFIABLE_SECTIONS = ["summary", "skills", "experience", "projects"] as const;
 
-export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResumeProps) {
-  const [selectedResume, setSelectedResume] = useState("");
-  const [role, setRole] = useState("");
-  const [company, setCompany] = useState("");
-  const [jobDescription, setJobDescription] = useState("");
+export function EnhanceResume({
+  resumes,
+  resumesLoading,
+  onToast,
+  initialRole,
+  initialCompany,
+  initialJobDescription,
+  initialResumeId,
+  applicationId,
+  currentScore,
+}: EnhanceResumeProps) {
+  const [selectedResume, setSelectedResume] = useState(initialResumeId || "");
+  const [role, setRole] = useState(initialRole || "");
+  const [company, setCompany] = useState(initialCompany || "");
+  const [jobDescription, setJobDescription] = useState(initialJobDescription || "");
+
+  // When prefilled values arrive (e.g. user navigates from application detail),
+  // sync them once.
+  useEffect(() => {
+    if (initialRole && !role) setRole(initialRole);
+    if (initialCompany && !company) setCompany(initialCompany);
+    if (initialJobDescription && !jobDescription) setJobDescription(initialJobDescription);
+    if (initialResumeId && !selectedResume) setSelectedResume(initialResumeId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialRole, initialCompany, initialJobDescription, initialResumeId]);
   const [sectionsToEnhance, setSectionsToEnhance] = useState<Set<string>>(
     new Set(MODIFIABLE_SECTIONS)
   );
@@ -92,6 +129,21 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
   const [noNewSkills, setNoNewSkills] = useState(false);
   const [preserveLength, setPreserveLength] = useState(false);
   const [rewriteIntensity, setRewriteIntensity] = useState<"light" | "moderate" | "aggressive">("moderate");
+
+  // Rule recommendations
+  interface Recommendation {
+    rewriteIntensity: "light" | "moderate" | "aggressive";
+    noNewSkills: boolean;
+    preserveLength: boolean;
+    prioritizeRecent: boolean;
+    strongSummaryRewrite: boolean;
+    emphasizeTechnicalStack: boolean;
+    focusDomain?: string;
+    reasons: string[];
+  }
+  const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
+  const [recommendationAccepted, setRecommendationAccepted] = useState(false);
+  const [loadingRecs, setLoadingRecs] = useState(false);
 
   // Save to application
   const [savingToApp, setSavingToApp] = useState(false);
@@ -110,6 +162,39 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
 
   const docxResumes = resumes.filter((r) => r.fileType === "docx");
   const selectedObj = resumes.find((r) => r.id === selectedResume);
+
+  // ── rule recommendations ──
+
+  const fetchRecommendations = async () => {
+    if (!selectedResume || !jobDescription.trim()) return;
+    setLoadingRecs(true);
+    try {
+      const res = await fetch("/api/ai/recommend-rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resumeId: selectedResume,
+          jobDescription: jobDescription.trim(),
+        }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setRecommendation(data.recommendation);
+      setRecommendationAccepted(false);
+    } catch {
+      /* non-critical */
+    } finally {
+      setLoadingRecs(false);
+    }
+  };
+
+  const acceptRecommendation = () => {
+    if (!recommendation) return;
+    setRewriteIntensity(recommendation.rewriteIntensity);
+    setNoNewSkills(recommendation.noNewSkills);
+    setPreserveLength(recommendation.preserveLength);
+    setRecommendationAccepted(true);
+  };
 
   const toggleSection = (kind: string) => {
     setSectionsToEnhance((prev) => {
@@ -232,24 +317,34 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
     if (!result) return;
     setSavingToApp(true);
     try {
-      const appRes = await fetch("/api/applications", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jobTitle: role.trim(),
-          company: company.trim(),
-          jobDescription: jobDescription.trim(),
-          status: "not_applied",
-        }),
-      });
-      if (!appRes.ok) { onToast({ message: "Failed to create application", variant: "error" }); return; }
-      const app = await appRes.json();
+      let targetAppId = applicationId;
 
+      // If no existing application was provided, create one.
+      if (!targetAppId) {
+        const appRes = await fetch("/api/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jobTitle: role.trim(),
+            company: company.trim(),
+            jobDescription: jobDescription.trim(),
+            status: "not_applied",
+            baseResumeId: selectedResume || undefined,
+          }),
+        });
+        if (!appRes.ok) { onToast({ message: "Failed to create application", variant: "error" }); return; }
+        const app = await appRes.json();
+        targetAppId = app.id;
+      }
+
+      // ALWAYS create a new ResumeVersion. This guarantees base resumes are
+      // never overwritten — each enhancement becomes a separate, versioned
+      // record linked to the application.
       await fetch("/api/resume-versions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          applicationId: app.id,
+          applicationId: targetAppId,
           baseResumeId: selectedResume || undefined,
           content: result.enhanced.text,
           isTailored: true,
@@ -257,7 +352,12 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
       });
 
       setSavedToApp(true);
-      onToast({ message: "Saved as application with enhanced resume", variant: "success" });
+      onToast({
+        message: applicationId
+          ? "Enhanced resume saved as new version on this application"
+          : "Saved as application with enhanced resume",
+        variant: "success",
+      });
     } catch {
       onToast({ message: "Save failed", variant: "error" });
     } finally {
@@ -277,6 +377,37 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Review: current score + target path */}
+            {currentScore != null && (
+              <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-3">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-1.5">Review</p>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[11px] text-gray-500">Current active score</p>
+                    <p className="text-2xl font-bold text-gray-900 tabular-nums">{currentScore}%</p>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-gray-300" />
+                  <div>
+                    <p className="text-[11px] text-gray-500">Target</p>
+                    <p className="text-2xl font-bold text-emerald-600 tabular-nums">95%+</p>
+                  </div>
+                </div>
+                {currentScore < 95 && (
+                  <p className="mt-2 text-[11px] text-gray-600 leading-relaxed">
+                    Gap of <span className="font-semibold">{95 - currentScore} pts</span>. Generate rule
+                    recommendations below for the fastest path to close it.
+                  </p>
+                )}
+              </div>
+            )}
+            {selectedObj && (
+              <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-white px-3 py-2">
+                <FileText className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+                <p className="text-xs text-gray-700 truncate">
+                  <span className="font-medium">Base resume:</span> {selectedObj.name}
+                </p>
+              </div>
+            )}
             {/* Resume select */}
             <div className="space-y-1.5">
               <Label>
@@ -395,6 +526,98 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                   </label>
                 ))}
               </div>
+              {/* Rule recommendations */}
+              <div className="border-t border-gray-100 pt-3">
+                {!recommendation ? (
+                  <button
+                    type="button"
+                    onClick={fetchRecommendations}
+                    disabled={!selectedResume || !jobDescription.trim() || loadingRecs}
+                    className={cn(
+                      "w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-colors border",
+                      (!selectedResume || !jobDescription.trim())
+                        ? "border-gray-100 text-gray-300 cursor-not-allowed"
+                        : "border-blue-200 bg-blue-50/50 text-blue-700 hover:bg-blue-50"
+                    )}
+                  >
+                    {loadingRecs ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5" />
+                    )}
+                    {loadingRecs ? "Analyzing..." : "Recommend Rules"}
+                  </button>
+                ) : (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-blue-900 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Recommended Rules
+                      </p>
+                      {recommendationAccepted ? (
+                        <Badge variant="success" className="text-[10px]">Applied</Badge>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={acceptRecommendation}
+                          className="text-[11px] font-medium text-blue-700 hover:text-blue-800"
+                        >
+                          Accept all
+                        </button>
+                      )}
+                    </div>
+                    <ul className="space-y-1 text-[11px] text-blue-900">
+                      <li>
+                        <span className="font-medium">Intensity:</span> {recommendation.rewriteIntensity}
+                      </li>
+                      <li>
+                        <span className="font-medium">Preserve length:</span> {recommendation.preserveLength ? "yes" : "no"}
+                      </li>
+                      <li>
+                        <span className="font-medium">Add new skills:</span> {recommendation.noNewSkills ? "no" : "yes"}
+                      </li>
+                      <li>
+                        <span className="font-medium">Prioritize recent roles:</span> {recommendation.prioritizeRecent ? "yes" : "no"}
+                      </li>
+                      {recommendation.focusDomain && (
+                        <li>
+                          <span className="font-medium">Focus domain:</span> {recommendation.focusDomain}
+                        </li>
+                      )}
+                    </ul>
+                    {recommendation.reasons.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-blue-200/50">
+                        <p className="text-[10px] text-blue-700 uppercase tracking-wider mb-1">Why</p>
+                        <ul className="space-y-0.5">
+                          {recommendation.reasons.map((r, i) => (
+                            <li key={i} className="text-[11px] text-blue-800 leading-relaxed">
+                              • {r}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={fetchRecommendations}
+                        className="text-[11px] text-blue-600 hover:text-blue-800"
+                      >
+                        Refresh
+                      </button>
+                      <span className="text-blue-300">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setRecommendation(null)}
+                        className="text-[11px] text-gray-500 hover:text-gray-700"
+                      >
+                        Dismiss (edit manually)
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Rules */}
               <div className="border-t border-gray-100 pt-3 space-y-2">
                 <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Rules</p>
@@ -566,6 +789,48 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
               </div>
             </div>
 
+            {/* Engine / provider status */}
+            {result.engine && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-100 text-[11px] text-gray-600">
+                <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-gray-400" />
+                <div>
+                  <span className="font-medium text-gray-700">{result.engine.label}</span>
+                  {result.engine.providerConfigured ? (
+                    <span className="text-gray-500"> · provider configured: {result.engine.providerName}{result.engine.providerModel ? ` (${result.engine.providerModel})` : ""}</span>
+                  ) : (
+                    <span className="text-gray-500"> · no external AI provider configured</span>
+                  )}
+                  <p className="mt-0.5 text-gray-500 leading-relaxed">{result.engine.note}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Re-enhance CTA when score is below 95% */}
+            {afterScore && afterScore.overallScore < 95 && (
+              <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-50 border border-amber-200">
+                <Sparkles className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-amber-900">
+                    Score below 95% target ({afterScore.overallScore}%)
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                    Try &quot;aggressive&quot; rewrite intensity, enable more sections, or
+                    re-run enhancement for further gains.
+                  </p>
+                </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="h-8 shrink-0"
+                  onClick={handleEnhance}
+                  disabled={enhancing}
+                >
+                  {enhancing ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 mr-1.5" />}
+                  Enhance Again
+                </Button>
+              </div>
+            )}
+
             {/* Score comparison */}
             {(beforeScore || afterScore) && (
               <Card>
@@ -579,13 +844,13 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                   <div className="grid grid-cols-2 gap-4">
                     {beforeScore && (
                       <div className="rounded-lg border border-gray-200 p-3">
-                        <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">Before</p>
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">Base Resume Score</p>
                         <MatchScoreCard overallScore={beforeScore.overallScore} skillsMatch={beforeScore.skillsMatch} experienceMatch={beforeScore.experienceMatch} keywordCoverage={beforeScore.keywordCoverage} domainMatch={beforeScore.domainMatch} compact />
                       </div>
                     )}
                     {afterScore && (
                       <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3">
-                        <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">After</p>
+                        <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">Enhanced Resume Score</p>
                         <MatchScoreCard overallScore={afterScore.overallScore} skillsMatch={afterScore.skillsMatch} experienceMatch={afterScore.experienceMatch} keywordCoverage={afterScore.keywordCoverage} domainMatch={afterScore.domainMatch} compact />
                       </div>
                     )}

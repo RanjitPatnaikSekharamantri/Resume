@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -90,16 +90,28 @@ type StudioMode = "generate" | "enhance";
 
 export default function AIStudioPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Prefill from query params (e.g. coming from /applications/[id])
+  const prefillRole = searchParams.get("role") || "";
+  const prefillCompany = searchParams.get("company") || "";
+  const prefillJd = searchParams.get("jd") || "";
+  const prefillResumeId = searchParams.get("resumeId") || "";
+  const prefillAppId = searchParams.get("applicationId") || "";
+  const prefillMode = searchParams.get("mode");
 
   // Top-level mode
-  const [studioMode, setStudioMode] = useState<StudioMode>("generate");
+  const [studioMode, setStudioMode] = useState<StudioMode>(
+    prefillMode === "enhance" ? "enhance" : "generate"
+  );
 
-  // Input state
-  const [role, setRole] = useState("");
-  const [company, setCompany] = useState("");
-  const [jobDescription, setJobDescription] = useState("");
-  const [selectedResume, setSelectedResume] = useState("");
+  // Input state — prefilled from the application context when available
+  const [role, setRole] = useState(prefillRole);
+  const [company, setCompany] = useState(prefillCompany);
+  const [jobDescription, setJobDescription] = useState(prefillJd);
+  const [selectedResume, setSelectedResume] = useState(prefillResumeId);
   const [generateMode, setGenerateMode] = useState<GenerateMode>("both");
+  const [currentAppScore, setCurrentAppScore] = useState<number | null>(null);
 
   // Resume library
   const [resumes, setResumes] = useState<BaseResume[]>([]);
@@ -118,6 +130,24 @@ export default function AIStudioPage() {
   // Save state
   const [saving, setSaving] = useState(false);
   const [savedAppId, setSavedAppId] = useState<string | null>(null);
+
+  // Mark saved app when coming from an existing application context.
+  useEffect(() => {
+    if (prefillAppId) setSavedAppId(prefillAppId);
+  }, [prefillAppId]);
+
+  // Fetch current active score on the prefilled application (for context).
+  useEffect(() => {
+    if (!prefillAppId) return;
+    fetch(`/api/applications/${prefillAppId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data.matchScore === "number") {
+          setCurrentAppScore(data.matchScore);
+        }
+      })
+      .catch(() => {});
+  }, [prefillAppId]);
 
   // Toast
   const [toast, setToast] = useState<ToastData>(null);
@@ -182,19 +212,42 @@ export default function AIStudioPage() {
         setActiveTab("resume");
       }
 
-      // Calculate before/after match scores
+      // Calculate before/after match scores using the SAME scoring engine.
+      // "Before" = profile summary + preferred role (when we have no base
+      // resume content) or the base resume name/category. Without this, we
+      // used to feed the target role as the before-text which produced
+      // wildly inaccurate "before" scores.
       try {
-        const beforeRes = await fetch("/api/ai/match-score", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jobDescription: jobDescription.trim(),
-            resumeText: role.trim(),
-            jobTitle: role.trim(),
-            company: company.trim(),
-          }),
-        });
-        if (beforeRes.ok) setBeforeScore(await beforeRes.json());
+        let beforeText = "";
+        try {
+          const profRes = await fetch("/api/profile");
+          if (profRes.ok) {
+            const prof = await profRes.json();
+            beforeText = [
+              prof?.summary,
+              prof?.preferredRole,
+              prof?.user?.name,
+            ].filter(Boolean).join(" ");
+          }
+        } catch { /* ignore */ }
+
+        if (!beforeText && selectedResumeObj) {
+          beforeText = `${selectedResumeObj.name} ${selectedResumeObj.roleCategory || ""}`;
+        }
+
+        if (beforeText && beforeText.length > 10) {
+          const beforeRes = await fetch("/api/ai/match-score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jobDescription: jobDescription.trim(),
+              resumeText: beforeText,
+              jobTitle: role.trim(),
+              company: company.trim(),
+            }),
+          });
+          if (beforeRes.ok) setBeforeScore(await beforeRes.json());
+        }
 
         const genResume = generateMode === "cover_letter" ? "" : (data.resume || data.content || "");
         if (genResume) {
@@ -235,6 +288,7 @@ export default function AIStudioPage() {
           company: company.trim(),
           jobDescription: jobDescription.trim(),
           status: "not_applied",
+          baseResumeId: selectedResume || undefined,
         }),
       });
 
@@ -361,11 +415,42 @@ export default function AIStudioPage() {
         </button>
       </div>
 
+      {/* In-context banner when launched from an application */}
+      {prefillAppId && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3">
+          <div className="flex items-center gap-2 text-sm text-blue-900">
+            <Briefcase className="w-4 h-4 text-blue-600" />
+            <span>
+              Working in context of{" "}
+              <span className="font-semibold">{prefillRole}</span>
+              {prefillCompany ? <> at <span className="font-semibold">{prefillCompany}</span></> : null}
+            </span>
+            {currentAppScore != null && (
+              <Badge variant="secondary" className="ml-2">
+                Current score: {currentAppScore}%
+              </Badge>
+            )}
+          </div>
+          <Link href={`/applications/${prefillAppId}`}>
+            <Button variant="outline" size="sm" className="h-8">
+              <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
+              Back to Application
+            </Button>
+          </Link>
+        </div>
+      )}
+
       {studioMode === "enhance" ? (
         <EnhanceResume
           resumes={resumes}
           resumesLoading={resumesLoading}
           onToast={setToast}
+          initialRole={prefillRole}
+          initialCompany={prefillCompany}
+          initialJobDescription={prefillJd}
+          initialResumeId={prefillResumeId}
+          applicationId={prefillAppId || undefined}
+          currentScore={currentAppScore}
         />
       ) : (
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -626,7 +711,9 @@ export default function AIStudioPage() {
                 <div className="grid grid-cols-2 gap-4">
                   {beforeScore && (
                     <div className="rounded-lg border border-gray-200 p-3">
-                      <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">Before (Profile)</p>
+                      <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">
+                        Base Resume Score
+                      </p>
                       <MatchScoreCard
                         overallScore={beforeScore.overallScore}
                         skillsMatch={beforeScore.skillsMatch}
@@ -639,7 +726,9 @@ export default function AIStudioPage() {
                   )}
                   {afterScore && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3">
-                      <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">After (Generated)</p>
+                      <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">
+                        Enhanced Resume Score
+                      </p>
                       <MatchScoreCard
                         overallScore={afterScore.overallScore}
                         skillsMatch={afterScore.skillsMatch}

@@ -24,6 +24,11 @@ interface MatchScoreCardProps {
   keywordCoverage?: number | null;
   domainMatch?: number | null;
   compact?: boolean;
+  /**
+   * Optional label clarifying which document is being scored
+   * (e.g. "Base Resume", "Enhanced Resume", "Current Active Resume").
+   */
+  documentLabel?: string;
 }
 
 export function MatchScoreCard({
@@ -33,6 +38,7 @@ export function MatchScoreCard({
   keywordCoverage,
   domainMatch,
   compact,
+  documentLabel,
 }: MatchScoreCardProps) {
   const hasBreakdown =
     skillsMatch != null ||
@@ -65,7 +71,7 @@ export function MatchScoreCard({
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-blue-600" />
-            Match Score
+            {documentLabel ? `${documentLabel} Score` : "Match Score"}
           </CardTitle>
           <Badge
             className={cn("text-xs font-semibold border", getScoreColor(overallScore))}
