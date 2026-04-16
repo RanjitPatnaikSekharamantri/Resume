@@ -33,7 +33,6 @@ import {
   ArrowLeft,
   ExternalLink,
   FileText,
-  Download,
   Trash2,
   Sparkles,
   Pencil,

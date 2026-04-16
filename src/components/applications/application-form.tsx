@@ -129,6 +129,7 @@ export function ApplicationForm({
       const submitData = { ...form };
       if (selectedResumeId) submitData.baseResumeId = selectedResumeId;
       await onSubmit(submitData);
+      setSelectedResumeId("");
       onOpenChange(false);
     } catch {
       setError("Something went wrong. Please try again.");
