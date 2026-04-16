@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import {
   buildDocx,
+  CANONICAL_SECTION_TITLES,
   type ResumeSection,
 } from "@/lib/docx-engine";
 
@@ -11,7 +12,7 @@ export async function POST(req: Request) {
     if (error) return error;
 
     const body = await req.json();
-    const { sections, fileName, format } = body;
+    const { sections, fileName, format, emphasizeTokens } = body;
 
     if (!sections || !Array.isArray(sections)) {
       return NextResponse.json(
@@ -21,13 +22,21 @@ export async function POST(req: Request) {
     }
 
     const resumeSections: ResumeSection[] = sections.map(
-      (s: { kind: string; title: string; lines: string[]; modifiable: boolean }) => ({
-        kind: s.kind as ResumeSection["kind"],
-        title: s.title,
-        lines: s.lines,
-        modifiable: s.modifiable,
-      })
+      (s: { kind: string; title: string; lines: string[]; modifiable: boolean }) => {
+        const kind = s.kind as ResumeSection["kind"];
+        return {
+          kind,
+          // Force canonical title on output regardless of what the client sent.
+          title: CANONICAL_SECTION_TITLES[kind] || s.title,
+          lines: s.lines,
+          modifiable: s.modifiable,
+        };
+      }
     );
+
+    const tokens: string[] = Array.isArray(emphasizeTokens)
+      ? emphasizeTokens.filter((t: unknown) => typeof t === "string")
+      : [];
 
     const baseName = fileName
       ? fileName.replace(/\.(docx|pdf)$/i, "")
@@ -44,7 +53,7 @@ export async function POST(req: Request) {
         })
         .join("\n\n");
 
-      const pdfBuffer = await buildPdf(text, `${baseName}_enhanced`);
+      const pdfBuffer = await buildPdf(text, `${baseName}_enhanced`, { emphasizeTokens: tokens });
       return new NextResponse(new Uint8Array(pdfBuffer), {
         status: 200,
         headers: {
@@ -56,10 +65,10 @@ export async function POST(req: Request) {
     }
 
     // Default: DOCX
-    const docxBuffer = await buildDocx({
-      sections: resumeSections,
-      rawText: "",
-    });
+    const docxBuffer = await buildDocx(
+      { sections: resumeSections, rawText: "" },
+      { emphasizeTokens: tokens }
+    );
 
     return new NextResponse(new Uint8Array(docxBuffer), {
       status: 200,
