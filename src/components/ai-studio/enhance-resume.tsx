@@ -205,6 +205,30 @@ export function EnhanceResume({
   const [savedToApp, setSavedToApp] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
+  // Active provider context (shown on Step 5 so users know whether
+  // enhancement will go through the LLM or the deterministic fallback).
+  const [activeProvider, setActiveProvider] =
+    useState<{ name: string; model: string | null; isActive: boolean } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/ai-providers")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: unknown) => {
+        if (cancelled) return;
+        if (Array.isArray(list)) {
+          const active = list.find(
+            (p: { isActive?: boolean }) => p && p.isActive
+          );
+          if (active) setActiveProvider(active as typeof activeProvider);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const docxResumes = resumes.filter((r) => r.fileType === "docx");
   const selectedObj = resumes.find((r) => r.id === selectedResume);
 
@@ -1091,6 +1115,48 @@ export function EnhanceResume({
           />
         </div>
 
+        {/* Engine / provider preview */}
+        <div
+          className={cn(
+            "flex items-start gap-2 rounded-lg p-3 text-[11px] leading-relaxed border",
+            activeProvider
+              ? "border-emerald-200 bg-emerald-50/40 text-emerald-900"
+              : "border-gray-200 bg-gray-50/40 text-gray-700"
+          )}
+        >
+          {activeProvider ? (
+            <>
+              <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-600" />
+              <div>
+                <p>
+                  <span className="font-semibold">Enhancement engine:</span>{" "}
+                  LLM via {activeProvider.name}
+                  {activeProvider.model ? ` · ${activeProvider.model}` : ""}
+                </p>
+                <p className="mt-0.5">
+                  The deterministic fallback will run automatically if the
+                  provider call fails. Engine used is reported on the compare
+                  step.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-gray-500" />
+              <div>
+                <p>
+                  <span className="font-semibold">Enhancement engine:</span>{" "}
+                  Built-in deterministic engine
+                </p>
+                <p className="mt-0.5">
+                  No AI provider is configured. Add an OpenAI or Anthropic key
+                  in Settings to enable LLM-based rewriting.
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+
         {error && (
           <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
             <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -1208,17 +1274,43 @@ export function EnhanceResume({
                     Still below 95% ({afterScore.overallScore}%)
                   </p>
                   <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                    Try a higher intensity or enable more sections and enhance again.
+                    Iterate — bump the intensity, expand sections, or re-run.
                   </p>
                 </div>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className="h-7 shrink-0"
-                  onClick={() => setStep(4)}
-                >
-                  Adjust rules
-                </Button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7"
+                    onClick={() => {
+                      // Bump intensity one level and immediately re-run.
+                      const next =
+                        rewriteIntensity === "light"
+                          ? "moderate"
+                          : rewriteIntensity === "moderate"
+                            ? "aggressive"
+                            : "aggressive";
+                      setRewriteIntensity(next);
+                      handleEnhance();
+                    }}
+                    disabled={enhancing}
+                  >
+                    {enhancing ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Enhance again (stronger)
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7"
+                    onClick={() => setStep(4)}
+                  >
+                    Adjust rules
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>

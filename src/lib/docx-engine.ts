@@ -700,7 +700,7 @@ export async function buildDocx(
             }),
           ],
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 240, after: 80 },
+          spacing: { before: 180, after: 40 },
         })
       );
     }
@@ -761,7 +761,7 @@ export async function buildDocx(
                 font: "Calibri",
               }),
             ],
-            spacing: { after: 80 },
+            spacing: { after: 60 },
           })
         );
         continue;
@@ -815,7 +815,7 @@ export async function buildDocx(
                   font: "Calibri",
                 }),
               ],
-              spacing: { before: 120, after: 40 },
+              spacing: { before: 100, after: 30 },
             })
           );
           continue;
