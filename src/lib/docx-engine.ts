@@ -15,6 +15,7 @@ export type SectionKind =
   | "summary"
   | "skills"
   | "experience"
+  | "projects"
   | "education"
   | "certifications"
   | "other";
@@ -31,19 +32,29 @@ export interface ParsedResume {
   rawText: string;
 }
 
+export interface EnhanceRules {
+  noNewSkills?: boolean;
+  preserveLength?: boolean;
+  rewriteIntensity?: "light" | "moderate" | "aggressive";
+  focusDomain?: string;
+}
+
 export interface EnhanceOptions {
   jobDescription: string;
   role: string;
   company: string;
   sectionsToEnhance: SectionKind[];
+  rules?: EnhanceRules;
 }
 
 const SECTION_HEADING_PATTERNS: [RegExp, SectionKind][] = [
   [/^(professional\s+)?summary|objective|profile/i, "summary"],
   [/^(core\s+)?(skills|competencies|technical\s+skills|technologies)/i, "skills"],
   [/^(professional\s+)?experience|work\s+(history|experience)|employment/i, "experience"],
+  [/^projects?|personal\s+projects?|key\s+projects?|selected\s+projects?/i, "projects"],
   [/^education|academic/i, "education"],
-  [/^certifications?|licenses?|credentials/i, "certifications"],
+  [/^certifications?|licenses?|credentials|awards?|honors?|publications?/i, "certifications"],
+  [/^(additional|volunteer|interests|languages|references|activities)/i, "other"],
 ];
 
 // ── Parse DOCX to sections ──
@@ -108,7 +119,7 @@ function detectSectionHeading(
 }
 
 function isModifiable(kind: SectionKind): boolean {
-  return kind === "summary" || kind === "skills" || kind === "experience";
+  return kind === "summary" || kind === "skills" || kind === "experience" || kind === "projects";
 }
 
 // ── Enhance sections ──
@@ -117,7 +128,18 @@ export function enhanceSections(
   parsed: ParsedResume,
   options: EnhanceOptions
 ): ParsedResume {
-  const keywords = extractKeywords(options.jobDescription);
+  const rules = options.rules || {};
+  let keywords = extractKeywords(options.jobDescription);
+
+  if (rules.focusDomain) {
+    const domainLower = rules.focusDomain.toLowerCase();
+    keywords = keywords.filter(
+      (k) => k.toLowerCase().includes(domainLower) || domainLower.includes(k.toLowerCase())
+    ).concat(keywords).slice(0, 15);
+  }
+
+  const intensity = rules.rewriteIntensity || "moderate";
+  const maxBullets = intensity === "light" ? 3 : intensity === "aggressive" ? 10 : 6;
   const enabledSet = new Set(options.sectionsToEnhance);
 
   const enhanced = parsed.sections.map((section) => {
@@ -127,17 +149,38 @@ export function enhanceSections(
 
     switch (section.kind) {
       case "summary":
-        return enhanceSummary(section, keywords, options);
+        return rules.preserveLength
+          ? preserveLengthEnhance(section, keywords, options)
+          : enhanceSummary(section, keywords, options);
       case "skills":
-        return enhanceSkills(section, keywords);
+        return rules.noNewSkills ? section : enhanceSkills(section, keywords);
       case "experience":
-        return enhanceExperience(section, keywords, options);
+      case "projects":
+        return enhanceExperience(section, keywords, options, maxBullets);
       default:
         return section;
     }
   });
 
   return { sections: enhanced, rawText: parsed.rawText };
+}
+
+function preserveLengthEnhance(
+  section: ResumeSection,
+  keywords: string[],
+  options: EnhanceOptions
+): ResumeSection {
+  const original = section.lines.join(" ").trim();
+  if (!original) return enhanceSummary(section, keywords, options);
+
+  const targetLen = original.length;
+  const enhanced = enhanceSummary(section, keywords, options);
+  const enhancedText = enhanced.lines.join(" ").trim();
+
+  if (enhancedText.length > targetLen * 1.15) {
+    return { ...enhanced, lines: [enhancedText.slice(0, targetLen).replace(/\s+\S*$/, ".")] };
+  }
+  return enhanced;
 }
 
 function enhanceSummary(
@@ -203,11 +246,11 @@ function enhanceSkills(
 function enhanceExperience(
   section: ResumeSection,
   keywords: string[],
-  options: EnhanceOptions
+  options: EnhanceOptions,
+  maxEnhancedBullets = 6
 ): ResumeSection {
   const enhanced: string[] = [];
   let bulletCount = 0;
-  const maxEnhancedBullets = 6;
 
   for (const line of section.lines) {
     if (/^[•\-–—\*]/.test(line.trim()) && bulletCount < maxEnhancedBullets) {

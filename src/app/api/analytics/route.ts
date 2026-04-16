@@ -11,10 +11,13 @@ export async function GET() {
       where: { userId: userId! },
       select: {
         id: true,
+        jobTitle: true,
         status: true,
         company: true,
         createdAt: true,
         updatedAt: true,
+        followUpDate: true,
+        reminderEnabled: true,
       },
     });
 
@@ -203,6 +206,11 @@ export async function GET() {
         weeklyGoal,
         milestones,
       },
+      upcomingReminders: applications
+        .filter((a) => a.reminderEnabled && a.followUpDate && new Date(a.followUpDate) >= new Date(new Date().toDateString()))
+        .sort((a, b) => new Date(a.followUpDate!).getTime() - new Date(b.followUpDate!).getTime())
+        .slice(0, 5)
+        .map((a) => ({ id: a.id, jobTitle: a.jobTitle, company: a.company, followUpDate: a.followUpDate })),
     });
   } catch (err) {
     console.error("Get analytics error:", err);

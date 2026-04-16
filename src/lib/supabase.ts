@@ -35,7 +35,27 @@ export function validateResumeFile(file: { name: string; size: number; type: str
     return { valid: false, error: "Only PDF and DOCX files are accepted" };
   }
 
+  const validMimes = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/octet-stream",
+    "",
+  ];
+  if (file.type && !validMimes.includes(file.type)) {
+    return { valid: false, error: "Invalid file type. Please upload a PDF or DOCX." };
+  }
+
   return { valid: true, error: null };
+}
+
+export function validateFileBuffer(buffer: Buffer, ext: string): boolean {
+  if (ext === ".pdf") {
+    return buffer.length >= 4 && buffer.slice(0, 4).toString() === "%PDF";
+  }
+  if (ext === ".docx") {
+    return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04;
+  }
+  return false;
 }
 
 export function buildStoragePath(userId: string, fileName: string): string {

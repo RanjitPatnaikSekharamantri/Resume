@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { computeWordDiff } from "@/lib/text-diff";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +34,7 @@ import {
   Plus,
   X,
   Check,
+  GitCompare,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -91,6 +93,11 @@ export function CoverLetterSection({
   // Delete
   const [deleteTarget, setDeleteTarget] = useState<CoverLetter | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Compare
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [compareA, setCompareA] = useState<string>("");
+  const [compareB, setCompareB] = useState<string>("");
 
   // ── generate ──
 
@@ -294,6 +301,21 @@ export function CoverLetterSection({
             )}
           </div>
           <div className="flex items-center gap-1.5">
+            {coverLetters.length >= 2 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => {
+                  setCompareA(coverLetters[0]?.id || "");
+                  setCompareB(coverLetters[1]?.id || "");
+                  setCompareOpen(true);
+                }}
+              >
+                <GitCompare className="w-3.5 h-3.5 mr-1" />
+                Compare
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -638,6 +660,60 @@ export function CoverLetterSection({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Compare dialog ── */}
+      <Dialog open={compareOpen} onOpenChange={setCompareOpen}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Compare Versions</DialogTitle>
+            <DialogDescription>Side-by-side diff with highlighted changes</DialogDescription>
+          </DialogHeader>
+          <div className="flex gap-3 mb-4">
+            <select value={compareA} onChange={(e) => setCompareA(e.target.value)} className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none">
+              {coverLetters.map((cl) => <option key={cl.id} value={cl.id}>v{cl.version}</option>)}
+            </select>
+            <span className="text-gray-400 self-center text-xs">vs</span>
+            <select value={compareB} onChange={(e) => setCompareB(e.target.value)} className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 outline-none">
+              {coverLetters.map((cl) => <option key={cl.id} value={cl.id}>v{cl.version}</option>)}
+            </select>
+          </div>
+          <CompareView
+            textA={coverLetters.find((c) => c.id === compareA)?.content || ""}
+            textB={coverLetters.find((c) => c.id === compareB)?.content || ""}
+            labelA={`v${coverLetters.find((c) => c.id === compareA)?.version || "?"}`}
+            labelB={`v${coverLetters.find((c) => c.id === compareB)?.version || "?"}`}
+          />
+        </DialogContent>
+      </Dialog>
     </>
+  );
+}
+
+function CompareView({ textA, textB, labelA, labelB }: { textA: string; textB: string; labelA: string; labelB: string }) {
+  const diff = useMemo(() => computeWordDiff(textA, textB), [textA, textB]);
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{labelA}</p>
+        <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap rounded-lg border border-gray-200 p-3 max-h-[50vh] overflow-y-auto">
+          {diff.map((span, i) => {
+            if (span.type === "removed") return <span key={i} className="bg-red-100 text-red-800 rounded-sm">{span.text}</span>;
+            if (span.type === "added") return null;
+            return <span key={i}>{span.text}</span>;
+          })}
+        </div>
+      </div>
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{labelB}</p>
+        <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap rounded-lg border border-gray-200 p-3 max-h-[50vh] overflow-y-auto">
+          {diff.map((span, i) => {
+            if (span.type === "added") return <span key={i} className="bg-emerald-100 text-emerald-800 rounded-sm">{span.text}</span>;
+            if (span.type === "removed") return null;
+            return <span key={i}>{span.text}</span>;
+          })}
+        </div>
+      </div>
+    </div>
   );
 }

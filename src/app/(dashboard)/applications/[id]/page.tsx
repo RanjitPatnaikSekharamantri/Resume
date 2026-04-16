@@ -102,6 +102,8 @@ interface ApplicationDetail {
   experienceMatch?: number;
   keywordCoverage?: number;
   domainMatch?: number;
+  followUpDate?: string;
+  reminderEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
   resumeVersions: ResumeVersion[];
@@ -560,6 +562,28 @@ export default function ApplicationDetailPage() {
             <CardContent className="space-y-3 text-sm">
               <SidebarRow label="Created" value={formatDate(app.createdAt)} />
               <SidebarRow label="Updated" value={formatDate(app.updatedAt)} />
+              <Separator />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500 text-sm">Follow-up</span>
+                  <input
+                    type="date"
+                    value={app.followUpDate ? new Date(app.followUpDate).toISOString().split("T")[0] : ""}
+                    onChange={async (e) => {
+                      await fetch(`/api/applications/${params.id}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          followUpDate: e.target.value || null,
+                          reminderEnabled: !!e.target.value,
+                        }),
+                      });
+                      fetchApp();
+                    }}
+                    className="text-xs border border-gray-200 rounded px-2 py-1 text-gray-700 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  />
+                </div>
+              </div>
               <Separator />
               <SidebarRow
                 label="Resumes"

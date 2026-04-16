@@ -32,6 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MatchScoreCard } from "@/components/applications/match-score-card";
 import type { ScoreBreakdown } from "@/lib/match-scoring";
+import { computeWordDiff, type DiffSpan } from "@/lib/text-diff";
 
 // ── types ──
 
@@ -69,12 +70,13 @@ const SECTION_LABELS: Record<string, string> = {
   summary: "Professional Summary",
   skills: "Skills & Competencies",
   experience: "Professional Experience",
+  projects: "Projects",
   education: "Education",
   certifications: "Certifications",
   other: "Other",
 };
 
-const MODIFIABLE_SECTIONS = ["summary", "skills", "experience"] as const;
+const MODIFIABLE_SECTIONS = ["summary", "skills", "experience", "projects"] as const;
 
 export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResumeProps) {
   const [selectedResume, setSelectedResume] = useState("");
@@ -85,10 +87,15 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
     new Set(MODIFIABLE_SECTIONS)
   );
 
+  // Rules
+  const [noNewSkills, setNoNewSkills] = useState(false);
+  const [preserveLength, setPreserveLength] = useState(false);
+  const [rewriteIntensity, setRewriteIntensity] = useState<"light" | "moderate" | "aggressive">("moderate");
+
   const [enhancing, setEnhancing] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<EnhanceResult | null>(null);
-  const [previewMode, setPreviewMode] = useState<"enhanced" | "original">("enhanced");
+  const [previewMode, setPreviewMode] = useState<"enhanced" | "original" | "diff">("enhanced");
   const [downloading, setDownloading] = useState(false);
   const [beforeScore, setBeforeScore] = useState<ScoreBreakdown | null>(null);
   const [afterScore, setAfterScore] = useState<ScoreBreakdown | null>(null);
@@ -126,6 +133,7 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
           role: role.trim(),
           company: company.trim(),
           sectionsToEnhance: [...sectionsToEnhance],
+          rules: { noNewSkills, preserveLength, rewriteIntensity },
         }),
       });
 
@@ -338,12 +346,41 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                         {kind === "summary" && "Tailor summary to the target role"}
                         {kind === "skills" && "Add missing keywords from the JD"}
                         {kind === "experience" && "Enhance bullet points (last 1–2 roles)"}
+                        {kind === "projects" && "Enhance project descriptions with JD keywords"}
                       </p>
                     </div>
                     <Pencil className="w-3.5 h-3.5 text-gray-400" />
                   </label>
                 ))}
               </div>
+              {/* Rules */}
+              <div className="border-t border-gray-100 pt-3 space-y-2">
+                <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Rules</p>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={noNewSkills} onChange={(e) => setNoNewSkills(e.target.checked)} className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+                  <span className="text-gray-700">Don&apos;t add new skills</span>
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input type="checkbox" checked={preserveLength} onChange={(e) => setPreserveLength(e.target.checked)} className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+                  <span className="text-gray-700">Preserve original length</span>
+                </label>
+                <div className="space-y-1">
+                  <p className="text-xs text-gray-500">Rewrite intensity</p>
+                  <div className="flex gap-1.5">
+                    {(["light", "moderate", "aggressive"] as const).map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setRewriteIntensity(v)}
+                        className={cn("px-3 py-1 rounded-md text-xs font-medium border transition-colors capitalize", rewriteIntensity === v ? "border-blue-200 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:bg-gray-50")}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50/60 border border-amber-200/60">
                 <ShieldCheck className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                 <p className="text-[11px] text-amber-800 leading-relaxed">
@@ -404,6 +441,17 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                     )}
                   >
                     Enhanced
+                  </button>
+                  <button
+                    onClick={() => setPreviewMode("diff")}
+                    className={cn(
+                      "px-3 py-1 rounded-md text-xs font-medium transition-colors",
+                      previewMode === "diff"
+                        ? "bg-white shadow-sm text-gray-900"
+                        : "text-gray-500 hover:text-gray-700"
+                    )}
+                  >
+                    Diff
                   </button>
                   <button
                     onClick={() => setPreviewMode("original")}
@@ -489,19 +537,39 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
             {/* Sections preview */}
             <Card>
               <CardContent className="p-0 divide-y divide-gray-100">
-                {(previewMode === "enhanced"
-                  ? result.enhanced.sections
-                  : result.original.sections
-                ).map((section, i) => (
-                  <SectionPreview
-                    key={`${section.kind}-${i}`}
-                    section={section}
-                    isEnhanced={
-                      previewMode === "enhanced" &&
-                      sectionsToEnhance.has(section.kind)
-                    }
-                  />
-                ))}
+                {previewMode === "diff" ? (
+                  result.enhanced.sections.map((section, i) => {
+                    const origSection = result.original.sections[i];
+                    const origText = origSection ? origSection.lines.join("\n") : "";
+                    const enhText = section.lines.join("\n");
+                    const diffSpans = sectionsToEnhance.has(section.kind)
+                      ? computeWordDiff(origText, enhText)
+                      : null;
+
+                    return (
+                      <SectionPreview
+                        key={`${section.kind}-${i}`}
+                        section={section}
+                        isEnhanced={sectionsToEnhance.has(section.kind)}
+                        diffSpans={diffSpans}
+                      />
+                    );
+                  })
+                ) : (
+                  (previewMode === "enhanced"
+                    ? result.enhanced.sections
+                    : result.original.sections
+                  ).map((section, i) => (
+                    <SectionPreview
+                      key={`${section.kind}-${i}`}
+                      section={section}
+                      isEnhanced={
+                        previewMode === "enhanced" &&
+                        sectionsToEnhance.has(section.kind)
+                      }
+                    />
+                  ))
+                )}
               </CardContent>
             </Card>
           </>
@@ -531,9 +599,11 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
 function SectionPreview({
   section,
   isEnhanced,
+  diffSpans,
 }: {
   section: SectionData;
   isEnhanced: boolean;
+  diffSpans?: DiffSpan[] | null;
 }) {
   const label = SECTION_LABELS[section.kind] || section.title || "Section";
 
@@ -560,15 +630,21 @@ function SectionPreview({
         )}
       </div>
       <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-        {section.lines.filter(Boolean).length > 0
-          ? section.lines.map((line, i) => (
-              <p key={i} className={cn("mb-1", !line && "h-2")}>
-                {line}
-              </p>
-            ))
-          : (
-            <p className="text-gray-400 italic text-xs">Empty section</p>
-          )}
+        {diffSpans ? (
+          <p>
+            {diffSpans.map((span, i) => {
+              if (span.type === "added") return <span key={i} className="bg-emerald-100 text-emerald-800 rounded-sm px-0.5">{span.text}</span>;
+              if (span.type === "removed") return <span key={i} className="bg-red-100 text-red-800 line-through rounded-sm px-0.5">{span.text}</span>;
+              return <span key={i}>{span.text}</span>;
+            })}
+          </p>
+        ) : section.lines.filter(Boolean).length > 0 ? (
+          section.lines.map((line, i) => (
+            <p key={i} className={cn("mb-1", !line && "h-2")}>{line}</p>
+          ))
+        ) : (
+          <p className="text-gray-400 italic text-xs">Empty section</p>
+        )}
       </div>
     </div>
   );

@@ -108,6 +108,17 @@ export default function SettingsPage() {
     fetchProviders();
   };
 
+  const [testing, setTesting] = useState<string | null>(null);
+  const handleTest = async (p: Provider) => {
+    setTesting(p.id);
+    try {
+      const res = await fetch("/api/ai-providers/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providerId: p.id }) });
+      const data = await res.json();
+      setToast({ message: data.message || (data.success ? "Connection OK" : "Test failed"), variant: data.success ? "success" : "error" });
+    } catch { setToast({ message: "Test failed", variant: "error" }); }
+    finally { setTesting(null); }
+  };
+
   return (
     <>
       <PageHeader title="Settings" description="Manage your account and integrations" />
@@ -161,6 +172,7 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => handleTest(p)} disabled={testing === p.id} className="px-2 py-1 rounded text-[10px] font-medium bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors disabled:opacity-50">{testing === p.id ? "Testing..." : "Test"}</button>
                       <button onClick={() => handleToggle(p)} className={cn("px-2 py-1 rounded text-[10px] font-medium transition-colors", p.isActive ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500")}>{p.isActive ? "Active" : "Inactive"}</button>
                       <button onClick={() => openEdit(p)} className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"><Pencil className="w-3.5 h-3.5" /></button>
                       <button onClick={() => setDeleteTarget(p)} className="p-1.5 rounded hover:bg-red-50 text-gray-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>

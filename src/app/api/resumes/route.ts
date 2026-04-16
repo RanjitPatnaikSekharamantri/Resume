@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
-import { uploadResume, validateResumeFile } from "@/lib/supabase";
+import { uploadResume, validateResumeFile, validateFileBuffer } from "@/lib/supabase";
 
 export async function GET() {
   try {
@@ -83,9 +83,15 @@ export async function POST(req: Request) {
         ? "application/pdf"
         : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
-    // Read file bytes and upload to Supabase
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+
+    if (!validateFileBuffer(buffer, ext)) {
+      return NextResponse.json(
+        { error: "File content does not match its extension. Please upload a valid PDF or DOCX." },
+        { status: 400 }
+      );
+    }
 
     let fileUrl: string;
     let storagePath: string;

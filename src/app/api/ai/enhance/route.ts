@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     if (error) return error;
 
     const body = await req.json();
-    const { resumeId, jobDescription, role, company, sectionsToEnhance } = body;
+    const { resumeId, jobDescription, role, company, sectionsToEnhance, rules } = body;
 
     if (!resumeId) {
       return NextResponse.json(
@@ -84,6 +84,7 @@ export async function POST(req: Request) {
       role: role.trim(),
       company: company.trim(),
       sectionsToEnhance: validSections,
+      rules: rules || {},
     });
 
     // Build preview text

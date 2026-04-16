@@ -19,6 +19,8 @@ const ALLOWED_FIELDS = new Set([
   "experienceMatch",
   "keywordCoverage",
   "domainMatch",
+  "followUpDate",
+  "reminderEnabled",
   "order",
 ]);
 
@@ -95,8 +97,10 @@ export async function PATCH(
           );
         }
         data.status = value;
-      } else if (key === "postedDate") {
-        data.postedDate = value ? new Date(value as string) : null;
+      } else if (key === "postedDate" || key === "followUpDate") {
+        data[key] = value ? new Date(value as string) : null;
+      } else if (key === "reminderEnabled") {
+        data.reminderEnabled = !!value;
       } else if (["matchScore", "skillsMatch", "experienceMatch", "keywordCoverage", "domainMatch", "order"].includes(key)) {
         data[key] = value != null ? Number(value) : null;
       } else {
@@ -136,6 +140,33 @@ export async function PATCH(
           applicationId: id,
           type: "notes_updated",
           description: "Notes updated",
+        },
+      });
+    }
+
+    // Log other field edits
+    const trackableFields = ["jobTitle", "company", "location", "salary", "jobUrl", "source", "jobDescription"];
+    const editedFields = trackableFields.filter(
+      (f) => data[f] !== undefined && data[f] !== (existing as Record<string, unknown>)[f]
+    );
+    if (editedFields.length > 0) {
+      await prisma.activity.create({
+        data: {
+          applicationId: id,
+          type: "fields_updated",
+          description: `Updated ${editedFields.join(", ")}`,
+        },
+      });
+    }
+
+    if (data.followUpDate !== undefined) {
+      await prisma.activity.create({
+        data: {
+          applicationId: id,
+          type: "reminder_set",
+          description: data.followUpDate
+            ? `Follow-up set for ${new Date(data.followUpDate as Date).toLocaleDateString()}`
+            : "Follow-up reminder cleared",
         },
       });
     }
