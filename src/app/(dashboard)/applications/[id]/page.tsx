@@ -689,18 +689,14 @@ export default function ApplicationDetailPage() {
         <div className="space-y-4">
           {app.matchScore != null ? (
             <>
-              <div>
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-                  Current Active Resume Score
-                </p>
-                <MatchScoreCard
-                  overallScore={app.matchScore}
-                  skillsMatch={app.skillsMatch}
-                  experienceMatch={app.experienceMatch}
-                  keywordCoverage={app.keywordCoverage}
-                  domainMatch={app.domainMatch}
-                />
-              </div>
+              <MatchScoreCard
+                overallScore={app.matchScore}
+                skillsMatch={app.skillsMatch}
+                experienceMatch={app.experienceMatch}
+                keywordCoverage={app.keywordCoverage}
+                domainMatch={app.domainMatch}
+                documentLabel="Current Active Resume"
+              />
               {app.matchScore < 95 && (
                 <Card className="border-amber-200 bg-amber-50/50">
                   <CardContent className="p-4">

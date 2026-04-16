@@ -395,7 +395,7 @@ export default function SettingsPage() {
             </DialogTitle>
             <DialogDescription>
               Enter your new email and current password. If email verification is
-              enabled, you'll need to re-verify the new address before signing in again.
+              enabled, you&apos;ll need to re-verify the new address before signing in again.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

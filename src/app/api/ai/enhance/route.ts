@@ -10,6 +10,21 @@ import {
   type ResumeSection,
 } from "@/lib/docx-engine";
 
+/**
+ * NOTE on AI provider usage:
+ *
+ * This route currently runs the deterministic, built-in enhancement engine
+ * from `src/lib/docx-engine.ts`. That engine performs keyword-weighted
+ * section rewriting locally and does NOT call any external LLM.
+ *
+ * If the user has configured an active AI provider (OpenAI / Anthropic /
+ * etc) under Settings > AI Providers, that fact is reported back to the
+ * client so the UI can label the result honestly ("Enhanced using built-in
+ * engine" vs "Enhanced using <provider>"). Full end-to-end provider-based
+ * rewriting is not implemented here — adding it requires a prompt template
+ * + streaming JSON parser per provider, which is tracked separately.
+ */
+
 const VALID_SECTION_KINDS = new Set<SectionKind>([
   "summary",
   "skills",
@@ -91,7 +106,13 @@ export async function POST(req: Request) {
     // Build preview text
     const previewText = sectionsToText(enhanced.sections);
 
-    // Return parsed sections (original + enhanced) for preview
+    // Detect whether a real AI provider is configured so the UI can label
+    // the output honestly (built-in deterministic engine vs. external LLM).
+    const activeProvider = await prisma.aIProvider.findFirst({
+      where: { userId: userId!, isActive: true },
+      select: { name: true, model: true },
+    });
+
     return NextResponse.json({
       original: {
         sections: parsed.sections.map(sectionToJson),
@@ -103,6 +124,16 @@ export async function POST(req: Request) {
       },
       resumeName: resume.name,
       fileName: resume.fileName,
+      engine: {
+        kind: "deterministic",
+        label: "Built-in enhancement engine",
+        providerConfigured: !!activeProvider,
+        providerName: activeProvider?.name || null,
+        providerModel: activeProvider?.model || null,
+        note: activeProvider
+          ? "An AI provider is configured but end-to-end LLM rewriting is not implemented; using the built-in deterministic engine."
+          : "No AI provider configured; using the built-in deterministic engine.",
+      },
     });
   } catch (err) {
     console.error("Enhance error:", err);

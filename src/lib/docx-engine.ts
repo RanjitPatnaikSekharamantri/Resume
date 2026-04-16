@@ -139,8 +139,12 @@ export function enhanceSections(
   }
 
   const intensity = rules.rewriteIntensity || "moderate";
-  const maxBullets = intensity === "light" ? 3 : intensity === "aggressive" ? 10 : 6;
+  const maxBullets = intensity === "light" ? 3 : intensity === "aggressive" ? 12 : 8;
   const enabledSet = new Set(options.sectionsToEnhance);
+
+  // Track which experience block we're on so that recent roles (first two
+  // blocks) get stronger rewriting than older ones.
+  let experienceRoleIndex = 0;
 
   const enhanced = parsed.sections.map((section) => {
     if (!section.modifiable || !enabledSet.has(section.kind)) {
@@ -151,12 +155,23 @@ export function enhanceSections(
       case "summary":
         return rules.preserveLength
           ? preserveLengthEnhance(section, keywords, options)
-          : enhanceSummary(section, keywords, options);
+          : enhanceSummary(section, keywords, options, intensity);
       case "skills":
-        return rules.noNewSkills ? section : enhanceSkills(section, keywords);
-      case "experience":
+        return rules.noNewSkills ? section : enhanceSkills(section, keywords, intensity);
+      case "experience": {
+        const result = enhanceExperience(
+          section,
+          keywords,
+          options,
+          maxBullets,
+          intensity,
+          experienceRoleIndex
+        );
+        experienceRoleIndex += 1;
+        return result;
+      }
       case "projects":
-        return enhanceExperience(section, keywords, options, maxBullets);
+        return enhanceExperience(section, keywords, options, maxBullets, intensity, 99);
       default:
         return section;
     }
@@ -171,10 +186,10 @@ function preserveLengthEnhance(
   options: EnhanceOptions
 ): ResumeSection {
   const original = section.lines.join(" ").trim();
-  if (!original) return enhanceSummary(section, keywords, options);
+  if (!original) return enhanceSummary(section, keywords, options, "moderate");
 
   const targetLen = original.length;
-  const enhanced = enhanceSummary(section, keywords, options);
+  const enhanced = enhanceSummary(section, keywords, options, "light");
   const enhancedText = enhanced.lines.join(" ").trim();
 
   if (enhancedText.length > targetLen * 1.15) {
@@ -186,37 +201,74 @@ function preserveLengthEnhance(
 function enhanceSummary(
   section: ResumeSection,
   keywords: string[],
-  options: EnhanceOptions
+  options: EnhanceOptions,
+  intensity: "light" | "moderate" | "aggressive"
 ): ResumeSection {
   const original = section.lines.join(" ").trim();
+  const topKeywords = keywords.slice(0, 8);
+
   if (!original) {
     return {
       ...section,
       lines: [
-        `Results-driven professional with extensive experience in ${keywords.slice(0, 3).join(", ").toLowerCase()}. ` +
-          `Seeking to leverage this expertise as a ${options.role} at ${options.company}, ` +
-          `contributing through ${keywords.slice(3, 5).join(" and ").toLowerCase()} capabilities.`,
+        `Results-driven ${options.role} with extensive experience in ${topKeywords
+          .slice(0, 3)
+          .join(", ")
+          .toLowerCase()}. Proven track record of delivering measurable outcomes through ${topKeywords
+          .slice(3, 5)
+          .join(" and ")
+          .toLowerCase()}. Seeking to leverage this expertise at ${options.company} to drive impact across ${topKeywords
+          .slice(5, 7)
+          .join(" and ")
+          .toLowerCase()}.`,
       ],
     };
   }
 
-  let enhanced = original;
   const lowerOriginal = original.toLowerCase();
+  const missingKeywords = topKeywords.filter(
+    (k) => !lowerOriginal.includes(k.toLowerCase())
+  );
 
-  const missingKeywords = keywords
-    .slice(0, 5)
-    .filter((k) => !lowerOriginal.includes(k.toLowerCase()));
-
-  if (missingKeywords.length > 0) {
-    enhanced += ` Skilled in ${missingKeywords.join(", ").toLowerCase()} with a focus on delivering measurable outcomes.`;
+  if (intensity === "light") {
+    if (missingKeywords.length === 0) return { ...section, lines: [original] };
+    const enhanced =
+      original.replace(/\.?\s*$/, "") +
+      `. Skilled in ${missingKeywords.slice(0, 3).join(", ").toLowerCase()} with a focus on delivering measurable outcomes.`;
+    return { ...section, lines: [enhanced] };
   }
 
-  return { ...section, lines: [enhanced] };
+  // Moderate / aggressive: open with a strong value proposition tailored to
+  // the target role and company, then weave in the most relevant missing
+  // keywords. Keep the original factual content at the end so truth is
+  // preserved.
+  const lead =
+    intensity === "aggressive"
+      ? `Accomplished ${options.role} specializing in ${topKeywords
+          .slice(0, 3)
+          .join(", ")
+          .toLowerCase()}, with a proven record of driving measurable outcomes for ${options.company}-style organizations.`
+      : `${options.role} with deep expertise in ${topKeywords
+          .slice(0, 3)
+          .join(", ")
+          .toLowerCase()}.`;
+
+  const bridge = missingKeywords.length
+    ? ` Brings demonstrated strength in ${missingKeywords
+        .slice(0, 4)
+        .join(", ")
+        .toLowerCase()}.`
+    : "";
+
+  const trailer = ` ${original}`.replace(/\s+/g, " ").trim();
+
+  return { ...section, lines: [(lead + bridge + " " + trailer).trim()] };
 }
 
 function enhanceSkills(
   section: ResumeSection,
-  keywords: string[]
+  keywords: string[],
+  intensity: "light" | "moderate" | "aggressive"
 ): ResumeSection {
   const existing = new Set(
     section.lines
@@ -233,7 +285,7 @@ function enhanceSkills(
         (e) => e.includes(lower) || lower.includes(e)
       );
     })
-    .slice(0, 5);
+    .slice(0, intensity === "aggressive" ? 10 : intensity === "moderate" ? 6 : 3);
 
   if (newSkills.length === 0) return section;
 
@@ -247,14 +299,21 @@ function enhanceExperience(
   section: ResumeSection,
   keywords: string[],
   options: EnhanceOptions,
-  maxEnhancedBullets = 6
+  maxEnhancedBullets: number,
+  intensity: "light" | "moderate" | "aggressive",
+  roleIndex: number
 ): ResumeSection {
   const enhanced: string[] = [];
   let bulletCount = 0;
 
+  // Only the first two roles in a candidate's experience are rewritten with
+  // the highest intensity. Older roles receive a much lighter touch.
+  const effectiveIntensity: typeof intensity =
+    roleIndex < 2 ? intensity : intensity === "aggressive" ? "moderate" : "light";
+
   for (const line of section.lines) {
     if (/^[•\-–—\*]/.test(line.trim()) && bulletCount < maxEnhancedBullets) {
-      const enhancedBullet = enhanceBullet(line, keywords, options);
+      const enhancedBullet = enhanceBullet(line, keywords, options, effectiveIntensity);
       enhanced.push(enhancedBullet);
       bulletCount++;
     } else {
@@ -274,31 +333,126 @@ const BULLET_PHRASES = [
   (kw: string) => `, incorporating ${kw} principles`,
 ];
 
+const STRONG_VERBS = [
+  "Spearheaded", "Architected", "Delivered", "Led", "Drove", "Built",
+  "Scaled", "Optimized", "Launched", "Transformed",
+];
+
 let bulletPhraseIdx = 0;
+let strongVerbIdx = 0;
+
+// Current verbs that often indicate weak/passive openings we can strengthen.
+const WEAK_OPENING_RE = /^(responsible for|worked on|helped (with|to)?|assisted (with|in)?|participated in|involved in)\b/i;
 
 function enhanceBullet(
   bullet: string,
   keywords: string[],
-  _options: EnhanceOptions
+  _options: EnhanceOptions,
+  intensity: "light" | "moderate" | "aggressive"
 ): string {
   let text = bullet.trim();
-  const lowerText = text.toLowerCase();
+  const bulletPrefix = /^[•\-–—\*]\s*/.exec(text)?.[0] || "• ";
+  text = text.replace(/^[•\-–—\*]\s*/, "");
 
+  // Replace weak openings with strong action verbs (moderate / aggressive only).
+  if (intensity !== "light" && WEAK_OPENING_RE.test(text)) {
+    const verb = STRONG_VERBS[strongVerbIdx % STRONG_VERBS.length];
+    strongVerbIdx++;
+    text = text.replace(WEAK_OPENING_RE, verb).replace(/^([A-Z])/, (m) => m);
+  }
+
+  const lowerText = text.toLowerCase();
   const relevantKeyword = keywords.find(
     (k) => !lowerText.includes(k.toLowerCase())
   );
 
-  if (relevantKeyword) {
+  if (relevantKeyword && intensity !== "light") {
     text = text.replace(/\.?\s*$/, "");
     const phrase = BULLET_PHRASES[bulletPhraseIdx % BULLET_PHRASES.length];
     text += phrase(relevantKeyword.toLowerCase()) + ".";
     bulletPhraseIdx++;
   }
 
-  return text;
+  return bulletPrefix + text;
 }
 
 // ── Build DOCX from sections ──
+
+/**
+ * Heuristic: detect a line that likely contains a role header in an
+ * experience / projects section. These are the lines worth bolding
+ * ("Senior Engineer · Google · SF · 2021 – Present").
+ */
+const ROLE_HEADER_HINTS = [
+  /\bpresent\b/i,
+  /\b(19|20)\d{2}\s*[–—\-]\s*((19|20)\d{2}|present)/i, // year range
+  /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(19|20)\d{2}/i,
+  /\s[·|•–—]\s/, // clear separator between role / company / location / date
+];
+
+function isRoleHeaderLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/^[•\-–—\*]/.test(trimmed)) return false; // bullets aren't headers
+  if (trimmed.length > 160) return false;
+  return ROLE_HEADER_HINTS.some((re) => re.test(trimmed));
+}
+
+/**
+ * Technical tokens & proper-noun-ish phrases worth bolding inline (ATS-safe).
+ * Kept conservative to avoid over-bolding.
+ */
+const EMPHASIZE_TOKENS = [
+  "TypeScript", "JavaScript", "Python", "Go", "Golang", "Rust", "Java", "Kotlin",
+  "React", "Next.js", "Node.js", "GraphQL", "REST",
+  "AWS", "GCP", "Azure", "Kubernetes", "Docker", "Terraform",
+  "PostgreSQL", "MySQL", "Redis", "Kafka",
+  "CI/CD", "SRE",
+];
+
+function buildEmphasizedRuns(text: string): TextRun[] {
+  if (!text) return [new TextRun({ text: "", size: 21, font: "Calibri" })];
+
+  // Build a single regex that matches any emphasize token as a whole word.
+  const pattern = EMPHASIZE_TOKENS.map((t) =>
+    t.replace(/[.+*?^${}()|[\]\\]/g, "\\$&")
+  ).join("|");
+  const re = new RegExp(`\\b(${pattern})\\b`, "g");
+
+  const runs: TextRun[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      runs.push(
+        new TextRun({
+          text: text.slice(lastIdx, match.index),
+          size: 21,
+          font: "Calibri",
+        })
+      );
+    }
+    runs.push(
+      new TextRun({
+        text: match[0],
+        bold: true,
+        size: 21,
+        font: "Calibri",
+      })
+    );
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastIdx < text.length) {
+    runs.push(
+      new TextRun({
+        text: text.slice(lastIdx),
+        size: 21,
+        font: "Calibri",
+      })
+    );
+  }
+  return runs.length ? runs : [new TextRun({ text, size: 21, font: "Calibri" })];
+}
 
 export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
   const children: Paragraph[] = [];
@@ -364,27 +518,34 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
       } else if (isBullet) {
         children.push(
           new Paragraph({
-            children: [
-              new TextRun({
-                text: cleanLine,
-                size: 21,
-                font: "Calibri",
-              }),
-            ],
+            children: buildEmphasizedRuns(cleanLine),
             bullet: { level: 0 },
             spacing: { after: 40 },
           })
         );
-      } else {
+      } else if (
+        (section.kind === "experience" || section.kind === "projects") &&
+        isRoleHeaderLine(cleanLine)
+      ) {
+        // Role / company / location / date line — bold in full for stronger
+        // visual hierarchy in the experience section.
         children.push(
           new Paragraph({
             children: [
               new TextRun({
                 text: cleanLine,
+                bold: true,
                 size: 21,
                 font: "Calibri",
               }),
             ],
+            spacing: { before: 80, after: 40 },
+          })
+        );
+      } else {
+        children.push(
+          new Paragraph({
+            children: buildEmphasizedRuns(cleanLine),
             spacing: { after: 40 },
           })
         );

@@ -23,6 +23,18 @@ export async function buildPdf(text: string, title?: string): Promise<Buffer> {
     const lines = text.split("\n");
     let isFirstLine = true;
 
+    // Heuristics for detecting role header lines inside experience sections.
+    const ROLE_HEADER_HINTS = [
+      /\bpresent\b/i,
+      /\b(19|20)\d{2}\s*[–—\-]\s*((19|20)\d{2}|present)/i,
+      /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(19|20)\d{2}/i,
+      /\s[·|•–—]\s/,
+    ];
+    const isRoleHeaderLine = (s: string) =>
+      ROLE_HEADER_HINTS.some((re) => re.test(s)) &&
+      !/^[•\-–—\*]/.test(s) &&
+      s.length < 160;
+
     for (const line of lines) {
       const trimmed = line.trim();
 
@@ -73,6 +85,13 @@ export async function buildPdf(text: string, title?: string): Promise<Buffer> {
           indent: 10,
           lineGap: 2,
         });
+        continue;
+      }
+
+      // Role / company / location / dates line — bold for hierarchy.
+      if (isRoleHeaderLine(trimmed)) {
+        doc.moveDown(0.2);
+        doc.fontSize(10.5).font("Helvetica-Bold").text(trimmed, { lineGap: 2 });
         continue;
       }
 
