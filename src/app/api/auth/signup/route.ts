@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 
-const MAX_USERS = 4;
 const PASSWORD_MIN_LENGTH = 8;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -53,16 +52,19 @@ export async function POST(req: Request) {
       );
     }
 
-    // Enforce max users
-    const userCount = await prisma.user.count();
-    if (userCount >= MAX_USERS) {
-      return NextResponse.json(
-        {
-          error:
-            "Maximum number of users reached (4). Contact the administrator.",
-        },
-        { status: 403 }
-      );
+    // Enforce optional user limit (set MAX_USERS env var to enable)
+    const maxUsersEnv = process.env.MAX_USERS;
+    if (maxUsersEnv) {
+      const limit = Number(maxUsersEnv);
+      if (!isNaN(limit) && limit > 0) {
+        const userCount = await prisma.user.count();
+        if (userCount >= limit) {
+          return NextResponse.json(
+            { error: "Maximum number of users reached. Contact the administrator." },
+            { status: 403 }
+          );
+        }
+      }
     }
 
     // Check for existing user
