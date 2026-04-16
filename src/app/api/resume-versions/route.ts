@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
-import { calculateMatchScore } from "@/lib/match-scoring";
+import { calculateAtsScore } from "@/lib/ats-scoring";
 
 export async function POST(req: Request) {
   try {
@@ -80,7 +80,7 @@ export async function POST(req: Request) {
     } | null = null;
 
     if (safeContent && app.jobDescription && safeContent.length > 10) {
-      const score = calculateMatchScore({
+      const score = calculateAtsScore({
         jobDescription: app.jobDescription,
         resumeText: safeContent,
         jobTitle: app.jobTitle,
@@ -89,27 +89,37 @@ export async function POST(req: Request) {
       await prisma.application.update({
         where: { id: applicationId },
         data: {
-          matchScore: score.overallScore,
-          skillsMatch: score.skillsMatch,
-          experienceMatch: score.experienceMatch,
-          keywordCoverage: score.keywordCoverage,
-          domainMatch: score.domainMatch,
+          matchScore: score.overall,
+          skillsMatch: score.legacyBreakdown.skillsMatch,
+          experienceMatch: score.legacyBreakdown.experienceMatch,
+          keywordCoverage: score.legacyBreakdown.keywordCoverage,
+          domainMatch: score.legacyBreakdown.domainMatch,
         },
       });
       persistedScore = {
-        matchScore: score.overallScore,
-        skillsMatch: score.skillsMatch,
-        experienceMatch: score.experienceMatch,
-        keywordCoverage: score.keywordCoverage,
-        domainMatch: score.domainMatch,
+        matchScore: score.overall,
+        skillsMatch: score.legacyBreakdown.skillsMatch,
+        experienceMatch: score.legacyBreakdown.experienceMatch,
+        keywordCoverage: score.legacyBreakdown.keywordCoverage,
+        domainMatch: score.legacyBreakdown.domainMatch,
       };
 
       await prisma.activity.create({
         data: {
           applicationId,
           type: "match_score_calculated",
-          description: `Active Resume Score updated: ${score.overallScore}% (v${version})`,
-          metadata: JSON.stringify(score),
+          description: `Active Resume Score updated: ${score.overall}/100 (v${version})`,
+          metadata: JSON.stringify({
+            overall: score.overall,
+            dimensions: Object.fromEntries(
+              Object.entries(score.dimensions).map(([k, d]) => [
+                k,
+                { value: d.value, max: d.max },
+              ])
+            ),
+            missingRequirements: score.missingRequirements,
+            penalties: score.penalties,
+          }),
         },
       });
     }

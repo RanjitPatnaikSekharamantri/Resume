@@ -57,6 +57,8 @@ interface EnhanceResult {
   scores?: {
     base: ScoreBreakdown;
     enhanced: ScoreBreakdown;
+    baseAts?: import("@/lib/ats-scoring").AtsScore;
+    enhancedAts?: import("@/lib/ats-scoring").AtsScore;
   };
   usage?: {
     promptTokens?: number;
@@ -239,6 +241,12 @@ export function EnhanceResume({
   // Scoring
   const [baselineScore, setBaselineScore] = useState<ScoreBreakdown | null>(null);
   const [afterScore, setAfterScore] = useState<ScoreBreakdown | null>(null);
+  const [baselineAts, setBaselineAts] = useState<
+    import("@/lib/ats-scoring").AtsScore | null
+  >(null);
+  const [afterAts, setAfterAts] = useState<
+    import("@/lib/ats-scoring").AtsScore | null
+  >(null);
   const [baselineLoading, setBaselineLoading] = useState(false);
 
   // Save / download
@@ -432,6 +440,7 @@ export function EnhanceResume({
     setError("");
     setResult(null);
     setAfterScore(null);
+    setAfterAts(null);
 
     try {
       // Only include experience overrides for rows the user actually
@@ -492,6 +501,8 @@ export function EnhanceResume({
       // directly — no more divergent client-side calls.
       if (data.scores?.base) setBaselineScore(data.scores.base);
       if (data.scores?.enhanced) setAfterScore(data.scores.enhanced);
+      if (data.scores?.baseAts) setBaselineAts(data.scores.baseAts);
+      if (data.scores?.enhancedAts) setAfterAts(data.scores.enhancedAts);
 
       onToast({ message: "Resume enhanced", variant: "success" });
       setStep(7);
@@ -1584,6 +1595,7 @@ export function EnhanceResume({
                     Base Resume Score
                   </p>
                   <MatchScoreCard
+                    ats={baselineAts}
                     overallScore={baselineScore.overallScore}
                     skillsMatch={baselineScore.skillsMatch}
                     experienceMatch={baselineScore.experienceMatch}
@@ -1599,6 +1611,7 @@ export function EnhanceResume({
                     Enhanced Resume Score
                   </p>
                   <MatchScoreCard
+                    ats={afterAts}
                     overallScore={afterScore.overallScore}
                     skillsMatch={afterScore.skillsMatch}
                     experienceMatch={afterScore.experienceMatch}
@@ -1609,6 +1622,21 @@ export function EnhanceResume({
                 </div>
               )}
             </div>
+
+            {/* Full ATS breakdown for the enhanced version so the user sees
+                penalties, missing requirements, and concrete improvement
+                suggestions inline. */}
+            {afterAts && (
+              <div className="mt-4">
+                <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">
+                  Enhanced Resume — full breakdown
+                </p>
+                <MatchScoreCard
+                  ats={afterAts}
+                  documentLabel="Enhanced Resume"
+                />
+              </div>
+            )}
             {afterScore && afterScore.overallScore < 95 && (
               <div className="mt-3 flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
                 <Sparkles className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600" />

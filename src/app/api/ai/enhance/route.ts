@@ -18,11 +18,11 @@ import {
   type ResolvedProvider,
 } from "@/lib/llm-provider";
 import { enhanceWithLLM } from "@/lib/llm-enhance";
-import { calculateMatchScore } from "@/lib/match-scoring";
 import {
   applyExperienceRoleOverrides,
   type ExperienceRoleOverrides,
 } from "@/lib/role-alignment";
+import { calculateAtsScore } from "@/lib/ats-scoring";
 
 /**
  * Sections the enhancement engine is allowed to modify.
@@ -234,13 +234,13 @@ export async function POST(req: Request) {
     // enhanced scores using the SAME scoring engine and SAME JD. This is
     // the single source of truth for "Base Resume Score" vs "Enhanced
     // Resume Score" labels in the UI — no separate calls from the client.
-    const baseScore = calculateMatchScore({
+    const baseScore = calculateAtsScore({
       jobDescription: jobDescription.trim(),
       resumeText: originalText,
       jobTitle: role.trim(),
       company: company.trim(),
     });
-    const enhancedScore = calculateMatchScore({
+    const enhancedScore = calculateAtsScore({
       jobDescription: jobDescription.trim(),
       resumeText: previewText,
       jobTitle: role.trim(),
@@ -284,8 +284,24 @@ export async function POST(req: Request) {
         ? Object.keys(experienceRoleOverrides || {}).length
         : 0,
       scores: {
-        base: baseScore,
-        enhanced: enhancedScore,
+        // Legacy shape expected by existing MatchScoreCard consumers.
+        base: {
+          overallScore: baseScore.overall,
+          skillsMatch: baseScore.legacyBreakdown.skillsMatch,
+          experienceMatch: baseScore.legacyBreakdown.experienceMatch,
+          keywordCoverage: baseScore.legacyBreakdown.keywordCoverage,
+          domainMatch: baseScore.legacyBreakdown.domainMatch,
+        },
+        enhanced: {
+          overallScore: enhancedScore.overall,
+          skillsMatch: enhancedScore.legacyBreakdown.skillsMatch,
+          experienceMatch: enhancedScore.legacyBreakdown.experienceMatch,
+          keywordCoverage: enhancedScore.legacyBreakdown.keywordCoverage,
+          domainMatch: enhancedScore.legacyBreakdown.domainMatch,
+        },
+        // Full ATS shape (new UI).
+        baseAts: baseScore,
+        enhancedAts: enhancedScore,
       },
       usage: usage || null,
       engine,

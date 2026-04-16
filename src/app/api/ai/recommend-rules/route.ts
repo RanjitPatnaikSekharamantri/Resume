@@ -3,7 +3,7 @@ import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 import { getSignedDownloadUrl } from "@/lib/supabase";
 import { parseDocx, sectionsToText } from "@/lib/docx-engine";
-import { calculateMatchScore } from "@/lib/match-scoring";
+import { calculateAtsScore } from "@/lib/ats-scoring";
 import { recommendRules } from "@/lib/rule-recommender";
 
 /**
@@ -66,17 +66,27 @@ export async function POST(req: Request) {
         .join(" ");
     }
 
-    const score = resumeText
-      ? calculateMatchScore({ jobDescription, resumeText })
+    const ats = resumeText
+      ? calculateAtsScore({ jobDescription, resumeText })
+      : null;
+
+    const legacyScore = ats
+      ? {
+          overallScore: ats.overall,
+          skillsMatch: ats.legacyBreakdown.skillsMatch,
+          experienceMatch: ats.legacyBreakdown.experienceMatch,
+          keywordCoverage: ats.legacyBreakdown.keywordCoverage,
+          domainMatch: ats.legacyBreakdown.domainMatch,
+        }
       : null;
 
     const recommendation = recommendRules({
       jobDescription,
       resumeText,
-      score,
+      score: legacyScore,
     });
 
-    return NextResponse.json({ score, recommendation });
+    return NextResponse.json({ score: legacyScore, ats, recommendation });
   } catch (err) {
     console.error("Recommend rules error:", err);
     return NextResponse.json(

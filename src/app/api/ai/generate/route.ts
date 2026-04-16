@@ -22,7 +22,21 @@ export async function POST(req: Request) {
       baseResumeId,
       type,
       headerRole,
-    } = body;
+      enhancedResumeText,
+    } = body as {
+      jobDescription: string;
+      role: string;
+      company: string;
+      baseResumeId?: string | null;
+      type?: string;
+      headerRole?: string;
+      /**
+       * Optional — the enhanced resume text for this application. When
+       * provided, cover letters are tightly grounded in this content so
+       * they describe the same achievements the resume does.
+       */
+      enhancedResumeText?: string;
+    };
 
     if (!jobDescription || !role || !company) {
       return NextResponse.json(
@@ -68,6 +82,10 @@ export async function POST(req: Request) {
       headerRole: (headerRole || role || "").trim(),
       company: company.trim(),
       jobDescription: jobDescription.trim(),
+      enhancedResumeText:
+        typeof enhancedResumeText === "string"
+          ? enhancedResumeText.slice(0, 8000)
+          : "",
     };
 
     const provider = await getActiveProviderForUser(userId!);
@@ -173,12 +191,23 @@ export async function POST(req: Request) {
 }
 
 function buildCoverLetterPrompt(ctx: GenerationContext): string {
-  return [
+  const parts = [
     `Write a cover letter for the candidate applying to the ${ctx.role} position at ${ctx.company}.`,
-    `Use "${ctx.headerRole}" as the self-description in the opening (i.e., the candidate positions themselves as a ${ctx.headerRole}).`,
+    `Use "${ctx.headerRole}" as the self-description in the opening (i.e., the candidate positions themselves as a ${ctx.headerRole}). The cover letter MUST be consistent with the resume — same role language, same tools mentioned, same companies, no contradictions.`,
     "",
     `CANDIDATE NAME: ${ctx.name}`,
     ctx.summary ? `CANDIDATE SUMMARY (facts — do not invent): ${ctx.summary}` : "",
+  ];
+
+  if (ctx.enhancedResumeText) {
+    parts.push(
+      "",
+      "ENHANCED RESUME (use this as the source of truth for specific achievements, tools, and companies — do NOT contradict it):",
+      ctx.enhancedResumeText.slice(0, 6000)
+    );
+  }
+
+  parts.push(
     "",
     "JOB DESCRIPTION:",
     ctx.jobDescription.slice(0, 6000),
@@ -187,13 +216,14 @@ function buildCoverLetterPrompt(ctx: GenerationContext): string {
     `- Address "Dear Hiring Manager," unless a named recipient is in the JD.`,
     `- Explicitly mention both the role name (${ctx.role}) and the company name (${ctx.company}).`,
     `- Reflect the header role (${ctx.headerRole}) consistently.`,
+    "- Reference 2–3 concrete achievements or tools that appear in the resume (not generic filler).",
     "- 3–4 short paragraphs, 250–350 words.",
     `- Sign off with "Sincerely,\\n${ctx.name}".`,
     "- No contact block at the top (client adds it).",
-    "- Plain text, no markdown.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+    "- Plain text, no markdown."
+  );
+
+  return parts.filter(Boolean).join("\n");
 }
 
 /**
@@ -236,6 +266,7 @@ interface GenerationContext {
   headerRole: string;
   company: string;
   jobDescription: string;
+  enhancedResumeText: string;
 }
 
 // ── resume generator ──

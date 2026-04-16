@@ -271,11 +271,47 @@ export default function ApplicationDetailPage() {
   const [recalculating, setRecalculating] = useState(false);
   const [generatingCoverLetter, setGeneratingCoverLetter] = useState(false);
 
+  // Full ATS breakdown for the currently-active ResumeVersion. Computed on
+  // demand so the sidebar can show the new 6-dimension view with penalties
+  // / missing requirements / suggestions.
+  const [activeAts, setActiveAts] = useState<import("@/lib/ats-scoring").AtsScore | null>(null);
+
   // Pick a default base resume if the application has any linked versions
   const linkedBaseResumeId = React.useMemo(() => {
     if (!app) return null;
     const linked = app.resumeVersions.find((rv) => rv.baseResumeId);
     return linked?.baseResumeId || null;
+  }, [app]);
+
+  // On load, fetch the active ATS breakdown if the application has an
+  // active version + JD. Non-mutating (persistAsActive is false).
+  React.useEffect(() => {
+    if (!app || !app.jobDescription) return;
+    const activeRv = [...app.resumeVersions]
+      .filter((rv) => rv.content && rv.content.trim().length > 10)
+      .sort((a, b) => b.version - a.version)[0];
+    if (!activeRv) return;
+    let cancelled = false;
+    fetch("/api/ai/match-score", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jobDescription: app.jobDescription,
+        resumeText: activeRv.content,
+        jobTitle: app.jobTitle,
+        company: app.company,
+        sourceLabel: "active",
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.ats) return;
+        setActiveAts(data.ats);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [app]);
 
   const handleRecalcScore = async () => {
@@ -319,8 +355,12 @@ export default function ApplicationDetailPage() {
         return;
       }
       const data = await res.json();
+      // data.overallScore is the old-style 0..100 number; data.ats is the
+      // new full ATS breakdown. Keep it in local state so the sidebar can
+      // render the richer breakdown immediately without a page reload.
+      if (data.ats) setActiveAts(data.ats);
       setToast({
-        message: `Current Active Resume Score: ${data.overallScore}% (v${activeRv.version})`,
+        message: `Current Active Resume Score: ${data.overallScore}/100 (v${activeRv.version})`,
         variant: "success",
       });
       fetchApp();
@@ -356,6 +396,13 @@ export default function ApplicationDetailPage() {
     }
     setGeneratingCoverLetter(true);
     try {
+      // Feed the most recent ResumeVersion content into the generator so
+      // the cover letter is grounded in the exact achievements the
+      // candidate's resume describes — no mismatched tools or roles.
+      const activeRv = [...app.resumeVersions]
+        .filter((rv) => rv.content && rv.content.trim().length > 10)
+        .sort((a, b) => b.version - a.version)[0];
+
       const genRes = await fetch("/api/ai/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -365,6 +412,7 @@ export default function ApplicationDetailPage() {
           company: app.company,
           baseResumeId: linkedBaseResumeId,
           type: "cover_letter",
+          enhancedResumeText: activeRv?.content || undefined,
         }),
       });
       if (!genRes.ok) {
@@ -691,6 +739,7 @@ export default function ApplicationDetailPage() {
           {app.matchScore != null ? (
             <>
               <MatchScoreCard
+                ats={activeAts}
                 overallScore={app.matchScore}
                 skillsMatch={app.skillsMatch}
                 experienceMatch={app.experienceMatch}
