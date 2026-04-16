@@ -1,6 +1,30 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import {
+  calculateStreak,
+  buildWeeklyActivity,
+  getThisWeekCount,
+  getUserDayKey,
+} from "@/lib/analytics-tz";
+
+// ── in-memory cache (per-user, 45-second TTL) ──
+
+const cache = new Map<string, { data: unknown; expires: number }>();
+const CACHE_TTL = 45_000;
+
+function getCached(key: string): unknown | null {
+  const entry = cache.get(key);
+  if (!entry || Date.now() > entry.expires) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(key: string, data: unknown) {
+  cache.set(key, { data, expires: Date.now() + CACHE_TTL });
+}
 
 export async function GET(req: Request) {
   try {
@@ -10,169 +34,100 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const userTz = url.searchParams.get("tz") || "UTC";
 
-    const applications = await prisma.application.findMany({
+    const cacheKey = `analytics:${userId}:${userTz}`;
+    const cached = getCached(cacheKey);
+    if (cached) return NextResponse.json(cached);
+
+    // ── 1. Status counts via Prisma groupBy (DB-level aggregation) ──
+
+    const statusGroups = await prisma.application.groupBy({
+      by: ["status"],
       where: { userId: userId! },
-      select: {
-        id: true,
-        jobTitle: true,
-        status: true,
-        company: true,
-        createdAt: true,
-        updatedAt: true,
-        followUpDate: true,
-        reminderEnabled: true,
-      },
+      _count: { _all: true },
     });
 
-    const total = applications.length;
-
-    // ── status counts ──
     const statusCounts: Record<string, number> = {};
-    for (const app of applications) {
-      statusCounts[app.status] = (statusCounts[app.status] || 0) + 1;
+    let total = 0;
+    for (const g of statusGroups) {
+      statusCounts[g.status] = g._count._all;
+      total += g._count._all;
     }
 
-    // ── stage groups ──
-    const applied = applications.filter((a) =>
-      ["applied", "screening", "interview", "offer", "rejected"].includes(a.status)
-    ).length;
-    const screeningPlus = applications.filter((a) =>
-      ["screening", "interview", "offer"].includes(a.status)
-    ).length;
-    const interviewPlus = applications.filter((a) =>
-      ["interview", "offer"].includes(a.status)
-    ).length;
+    // ── 2. Stage calculations (no extra DB call) ──
+
+    const applied = ["applied", "screening", "interview", "offer", "rejected"]
+      .reduce((s, k) => s + (statusCounts[k] || 0), 0);
+    const screeningPlus = ["screening", "interview", "offer"]
+      .reduce((s, k) => s + (statusCounts[k] || 0), 0);
+    const interviewPlus = ["interview", "offer"]
+      .reduce((s, k) => s + (statusCounts[k] || 0), 0);
     const offers = statusCounts["offer"] || 0;
     const rejected = statusCounts["rejected"] || 0;
-    const active = applications.filter(
-      (a) => !["rejected", "archived"].includes(a.status)
-    ).length;
+    const active = total - (statusCounts["rejected"] || 0) - (statusCounts["archived"] || 0);
 
-    // ── weekly activity (last 12 weeks with real date labels) ──
-    const now = new Date();
-    const weeklyActivity: { name: string; applications: number; start: Date }[] = [];
+    // ── 3. Fetch only what we need for time-based grouping (last 90 days) ──
 
-    for (let i = 11; i >= 0; i--) {
-      const weekStart = new Date(now);
-      weekStart.setDate(weekStart.getDate() - i * 7);
-      weekStart.setHours(0, 0, 0, 0);
-      const dayOfWeek = weekStart.getDay();
-      weekStart.setDate(weekStart.getDate() - dayOfWeek);
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
-      const weekEnd = new Date(weekStart);
-      weekEnd.setDate(weekEnd.getDate() + 7);
-
-      let label: string;
-      try {
-        label = weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: userTz });
-      } catch {
-        label = weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      }
-
-      const count = applications.filter((a) => {
-        const d = new Date(a.createdAt);
-        return d >= weekStart && d < weekEnd;
-      }).length;
-
-      weeklyActivity.push({ name: label, applications: count, start: weekStart });
-    }
-
-    // Deduplicate weeks that may overlap
-    const seen = new Set<string>();
-    const dedupedWeekly = weeklyActivity.filter((w) => {
-      if (seen.has(w.name)) return false;
-      seen.add(w.name);
-      return true;
+    const recentApps = await prisma.application.findMany({
+      where: { userId: userId!, createdAt: { gte: ninetyDaysAgo } },
+      select: { createdAt: true },
+      orderBy: { createdAt: "desc" },
     });
 
-    // ── conversion rates ──
-    const appToScreening =
-      applied > 0 ? Math.round((screeningPlus / applied) * 100) : 0;
-    const screeningToInterview =
-      screeningPlus > 0
-        ? Math.round((interviewPlus / screeningPlus) * 100)
-        : 0;
-    const interviewToOffer =
-      interviewPlus > 0 ? Math.round((offers / interviewPlus) * 100) : 0;
-    const responseRate =
-      applied > 0
-        ? Math.round(
-            (applications.filter((a) =>
-              ["screening", "interview", "offer", "rejected"].includes(a.status)
-            ).length /
-              applied) *
-              100
-          )
-        : 0;
+    const createdDates = recentApps.map((a) => a.createdAt);
 
-    // ── top companies ──
-    const companyCounts: Record<string, number> = {};
-    for (const app of applications) {
-      companyCounts[app.company] = (companyCounts[app.company] || 0) + 1;
-    }
-    const topCompanies = Object.entries(companyCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([company, count]) => ({ company, count }));
+    // ── 4. Timezone-aware weekly activity ──
 
-    // ── status distribution (sorted by pipeline order) ──
+    const weeklyActivity = buildWeeklyActivity(createdDates, userTz, 12);
+
+    // ── 5. Conversion rates ──
+
+    const appToScreening = applied > 0 ? Math.round((screeningPlus / applied) * 100) : 0;
+    const screeningToInterview = screeningPlus > 0 ? Math.round((interviewPlus / screeningPlus) * 100) : 0;
+    const interviewToOffer = interviewPlus > 0 ? Math.round((offers / interviewPlus) * 100) : 0;
+    const responded = ["screening", "interview", "offer", "rejected"]
+      .reduce((s, k) => s + (statusCounts[k] || 0), 0);
+    const responseRate = applied > 0 ? Math.round((responded / applied) * 100) : 0;
+
+    // ── 6. Top companies (DB-level) ──
+
+    const companyGroups = await prisma.application.groupBy({
+      by: ["company"],
+      where: { userId: userId! },
+      _count: { _all: true },
+      orderBy: { _count: { company: "desc" } },
+      take: 5,
+    });
+
+    const topCompanies = companyGroups.map((g) => ({
+      company: g.company,
+      count: g._count._all,
+    }));
+
+    // ── 7. Status distribution (ordered) ──
+
     const statusOrder = [
-      "not_applied",
-      "saved",
-      "applied",
-      "screening",
-      "interview",
-      "offer",
-      "rejected",
-      "archived",
+      "not_applied", "saved", "applied", "screening",
+      "interview", "offer", "rejected", "archived",
     ];
     const statusDistribution = statusOrder
       .filter((s) => (statusCounts[s] || 0) > 0)
       .map((s) => ({ name: s, value: statusCounts[s] || 0 }));
 
-    // ── gamification: streaks & milestones ──
-    const sortedByDate = [...applications].sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    // ── 8. Gamification (timezone-aware) ──
 
-    // Daily application streak using user timezone for correct day boundaries
-    let streak = 0;
-    if (sortedByDate.length > 0) {
-      const toDay = (d: Date) => {
-        try {
-          const parts = new Intl.DateTimeFormat("en-CA", { timeZone: userTz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-          return parts;
-        } catch {
-          return d.toISOString().slice(0, 10);
-        }
-      };
+    const allCreatedDates = await prisma.application.findMany({
+      where: { userId: userId! },
+      select: { createdAt: true },
+      orderBy: { createdAt: "desc" },
+    });
 
-      const todayStr = toDay(new Date());
-      const appDays = new Set(sortedByDate.map((a) => toDay(new Date(a.createdAt))));
+    const allDates = allCreatedDates.map((a) => a.createdAt);
+    const streak = calculateStreak(allDates, userTz);
+    const thisWeekApps = getThisWeekCount(allDates, userTz);
 
-      const advanceDay = (dateStr: string, offset: number) => {
-        const d = new Date(dateStr + "T12:00:00Z");
-        d.setUTCDate(d.getUTCDate() + offset);
-        return d.toISOString().slice(0, 10);
-      };
-
-      let checkDay = todayStr;
-      if (!appDays.has(checkDay)) checkDay = advanceDay(checkDay, -1);
-      while (appDays.has(checkDay)) {
-        streak++;
-        checkDay = advanceDay(checkDay, -1);
-      }
-    }
-
-    // Weekly apps this week
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
-    startOfWeek.setHours(0, 0, 0, 0);
-    const thisWeekApps = applications.filter(
-      (a) => new Date(a.createdAt) >= startOfWeek
-    ).length;
-
-    // Milestones
     const milestones = [
       { label: "First Application", target: 1, reached: total >= 1 },
       { label: "10 Applications", target: 10, reached: total >= 10 },
@@ -182,14 +137,23 @@ export async function GET(req: Request) {
       { label: "First Offer", target: 1, reached: offers >= 1 },
     ];
 
-    const weeklyGoal = 5;
+    // ── 9. Upcoming reminders ──
 
-    return NextResponse.json({
+    const todayStr = getUserDayKey(new Date(), userTz);
+    const reminders = await prisma.application.findMany({
+      where: {
+        userId: userId!,
+        reminderEnabled: true,
+        followUpDate: { gte: new Date(todayStr + "T00:00:00Z") },
+      },
+      select: { id: true, jobTitle: true, company: true, followUpDate: true },
+      orderBy: { followUpDate: "asc" },
+      take: 5,
+    });
+
+    const result = {
       statusDistribution,
-      weeklyActivity: dedupedWeekly.map(({ name, applications: count }) => ({
-        name,
-        applications: count,
-      })),
+      weeklyActivity,
       funnel: [
         { stage: "Total", count: total },
         { stage: "Applied", count: applied },
@@ -215,20 +179,16 @@ export async function GET(req: Request) {
       gamification: {
         streak,
         thisWeekApps,
-        weeklyGoal,
+        weeklyGoal: 5,
         milestones,
       },
-      upcomingReminders: applications
-        .filter((a) => a.reminderEnabled && a.followUpDate && new Date(a.followUpDate) >= new Date(new Date().toDateString()))
-        .sort((a, b) => new Date(a.followUpDate!).getTime() - new Date(b.followUpDate!).getTime())
-        .slice(0, 5)
-        .map((a) => ({ id: a.id, jobTitle: a.jobTitle, company: a.company, followUpDate: a.followUpDate })),
-    });
+      upcomingReminders: reminders,
+    };
+
+    setCache(cacheKey, result);
+    return NextResponse.json(result);
   } catch (err) {
     console.error("Get analytics error:", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
