@@ -65,15 +65,22 @@ export interface EnhanceOptions {
  * The canonical display title for every section kind. Used when rendering
  * DOCX / PDF / preview text so the output always matches the required
  * uppercase pattern regardless of the heading casing in the source file.
+ *
+ * Headings end with a colon to match the reference base-resume pattern:
+ *   PROFILE SUMMARY:
+ *   TECHNICAL SKILLS:
+ *   EDUCATION:
+ *   WORK EXPERIENCE:
+ *   CERTIFICATIONS:
  */
 export const CANONICAL_SECTION_TITLES: Record<SectionKind, string> = {
   header: "",
-  summary: "PROFILE SUMMARY",
-  skills: "TECHNICAL SKILLS",
-  experience: "WORK EXPERIENCE",
-  projects: "PROJECTS",
-  education: "EDUCATION",
-  certifications: "CERTIFICATIONS",
+  summary: "PROFILE SUMMARY:",
+  skills: "TECHNICAL SKILLS:",
+  experience: "WORK EXPERIENCE:",
+  projects: "PROJECTS:",
+  education: "EDUCATION:",
+  certifications: "CERTIFICATIONS:",
   other: "",
 };
 
@@ -166,6 +173,58 @@ export function normalizeSectionTitles(parsed: ParsedResume): ParsedResume {
     if (!canonical) return s;
     return { ...s, title: canonical };
   });
+  return { ...parsed, sections };
+}
+
+/**
+ * Replace / insert the target-role line in the header section so the
+ * resume header title matches the role the candidate is applying for.
+ *
+ * Heuristic: the first non-empty header line is the candidate name. The
+ * second line is treated as the existing "role / tagline" — if it already
+ * looks like a role (no phone/email/location markers), it gets replaced.
+ * If no such line exists, we insert the new role right after the name.
+ */
+export function applyHeaderRole(parsed: ParsedResume, headerRole: string): ParsedResume {
+  const role = headerRole.trim();
+  if (!role) return parsed;
+
+  const sections = parsed.sections.map((s) => {
+    if (s.kind !== "header") return s;
+
+    const lines = [...s.lines];
+    // Find the name line (first non-empty).
+    const nameIdx = lines.findIndex((l) => l.trim().length > 0);
+    if (nameIdx === -1) return s;
+
+    // Contact-line signals — we never overwrite these.
+    const looksLikeContact = (l: string) =>
+      /[@]/.test(l) || // email
+      /https?:\/\//i.test(l) || // url
+      /\+?\d[\d\s().\-]{6,}/.test(l) || // phone
+      /,\s*[A-Z]{2}\b/.test(l) || // City, ST
+      /linkedin|github/i.test(l);
+
+    // Candidate role line: the first non-contact line after the name.
+    let roleIdx = -1;
+    for (let i = nameIdx + 1; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (!t) continue;
+      if (looksLikeContact(t)) continue;
+      roleIdx = i;
+      break;
+    }
+
+    if (roleIdx === -1) {
+      // Insert right after the name.
+      lines.splice(nameIdx + 1, 0, role);
+    } else {
+      lines[roleIdx] = role;
+    }
+
+    return { ...s, lines };
+  });
+
   return { ...parsed, sections };
 }
 

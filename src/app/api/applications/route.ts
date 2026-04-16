@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
-import { calculateMatchScore } from "@/lib/match-scoring";
 
 export async function GET() {
   try {
@@ -44,7 +43,6 @@ export async function POST(req: Request) {
       source,
       notes,
       status,
-      matchScore,
     } = body;
 
     if (!jobTitle || !company) {
@@ -54,62 +52,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Auto-calculate match score if JD is present
-    let scoreData: {
-      matchScore?: number;
-      skillsMatch?: number;
-      experienceMatch?: number;
-      keywordCoverage?: number;
-      domainMatch?: number;
-    } = {};
-
-    if (jobDescription) {
-      // Try to use actual resume content if baseResumeId provided
-      let resumeText = "";
-
-      if (body.baseResumeId) {
-        const baseResume = await prisma.baseResume.findFirst({
-          where: { id: body.baseResumeId, userId: userId! },
-        });
-        // Check for any existing resume versions with content
-        if (baseResume) {
-          const latestVersion = await prisma.resumeVersion.findFirst({
-            where: { baseResumeId: baseResume.id },
-            orderBy: { createdAt: "desc" },
-            select: { content: true },
-          });
-          resumeText = latestVersion?.content || baseResume.name + " " + (baseResume.roleCategory || "");
-        }
-      }
-
-      // Fall back to profile data
-      if (!resumeText) {
-        const profile = await prisma.profile.findUnique({
-          where: { userId: userId! },
-        });
-        resumeText = [
-          profile?.summary || "",
-          profile?.preferredRole || "",
-          jobTitle,
-        ].filter(Boolean).join(" ");
-      }
-
-      if (resumeText.length > 10) {
-        const score = calculateMatchScore({
-          jobDescription,
-          resumeText,
-          jobTitle,
-          company,
-        });
-        scoreData = {
-          matchScore: score.overallScore,
-          skillsMatch: score.skillsMatch,
-          experienceMatch: score.experienceMatch,
-          keywordCoverage: score.keywordCoverage,
-          domainMatch: score.domainMatch,
-        };
-      }
-    }
+    // Initial Application-level score is intentionally LEFT UNSET here.
+    // Scoring is a property of a ResumeVersion — it is computed and
+    // persisted the first time a ResumeVersion with content is saved
+    // (see src/app/api/resume-versions/route.ts). Scoring off the profile
+    // summary or base-resume name fragments produced misleading numbers
+    // that didn't match what any other screen showed.
 
     const application = await prisma.application.create({
       data: {
@@ -124,7 +72,6 @@ export async function POST(req: Request) {
         source,
         notes,
         status: status || "not_applied",
-        ...scoreData,
       },
     });
 

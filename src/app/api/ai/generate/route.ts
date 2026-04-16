@@ -1,14 +1,28 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { callLLM, getActiveProviderForUser } from "@/lib/llm-provider";
 
 export async function POST(req: Request) {
+  const logs: string[] = [];
+  const log = (msg: string) => {
+    console.log(`[generate] ${msg}`);
+    logs.push(msg);
+  };
+
   try {
     const { error, userId } = await authenticateRequest();
     if (error) return error;
 
     const body = await req.json();
-    const { jobDescription, role, company, baseResumeId, type } = body;
+    const {
+      jobDescription,
+      role,
+      company,
+      baseResumeId,
+      type,
+      headerRole,
+    } = body;
 
     if (!jobDescription || !role || !company) {
       return NextResponse.json(
@@ -16,12 +30,6 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-
-    // Check for active AI provider (used when external API integration is available)
-    const activeProvider = await prisma.aIProvider.findFirst({
-      where: { userId: userId!, isActive: true },
-      select: { id: true, name: true, model: true },
-    });
 
     if (jobDescription.length > 15000) {
       return NextResponse.json(
@@ -57,29 +65,103 @@ export async function POST(req: Request) {
       resumeName,
       resumeCategory,
       role: role.trim(),
+      headerRole: (headerRole || role || "").trim(),
       company: company.trim(),
       jobDescription: jobDescription.trim(),
+    };
+
+    const provider = await getActiveProviderForUser(userId!);
+    const canLlm = !!provider && (provider.kind === "openai" || provider.kind === "anthropic");
+
+    // Try LLM for cover letters first; fall back to deterministic on error.
+    const generateCoverLetterText = async (): Promise<{
+      content: string;
+      engineKind: "llm" | "llm-fallback" | "deterministic";
+      fallbackReason?: string;
+    }> => {
+      if (!canLlm) {
+        return { content: generateCoverLetter(ctx), engineKind: "deterministic" };
+      }
+      log(`cover letter via ${provider!.name} (${provider!.model})`);
+      const res = await callLLM(provider!, {
+        systemPrompt:
+          "You are a professional writer drafting a concise, tailored cover letter. Output plain text only. Tone: confident but not arrogant. 3–4 short paragraphs. 250–350 words. Do NOT repeat the candidate's contact block — the client already handles that. Do NOT invent facts.",
+        userPrompt: buildCoverLetterPrompt(ctx),
+        temperature: 0.5,
+        maxTokens: 900,
+        onLog: log,
+      });
+      if (!res.ok) {
+        return {
+          content: generateCoverLetter(ctx),
+          engineKind: "llm-fallback",
+          fallbackReason: res.reason,
+        };
+      }
+      return {
+        content: composeCoverLetter(ctx, res.text.trim()),
+        engineKind: "llm",
+      };
     };
 
     if (type === "resume") {
       return NextResponse.json({
         content: generateTailoredResume(ctx),
         type: "resume",
+        engine: {
+          kind: "deterministic",
+          label: "Built-in template",
+          providerConfigured: !!provider,
+          providerName: provider?.name || null,
+          providerModel: provider?.model || null,
+          logs,
+        },
       });
     }
 
     if (type === "cover_letter") {
+      const { content, engineKind, fallbackReason } = await generateCoverLetterText();
       return NextResponse.json({
-        content: generateCoverLetter(ctx),
+        content,
         type: "cover_letter",
+        engine: {
+          kind: engineKind,
+          label:
+            engineKind === "llm"
+              ? `LLM (${provider!.name}${provider!.model ? ` · ${provider!.model}` : ""})`
+              : engineKind === "llm-fallback"
+                ? "LLM failed — template fallback"
+                : "Built-in template",
+          providerConfigured: !!provider,
+          providerName: provider?.name || null,
+          providerModel: provider?.model || null,
+          fallbackReason,
+          logs,
+        },
       });
     }
 
+    const { content: coverLetterContent, engineKind: clEngine, fallbackReason } =
+      await generateCoverLetterText();
+
     return NextResponse.json({
       resume: generateTailoredResume(ctx),
-      coverLetter: generateCoverLetter(ctx),
+      coverLetter: coverLetterContent,
       type: "both",
-      provider: activeProvider ? { name: activeProvider.name, model: activeProvider.model } : null,
+      engine: {
+        kind: clEngine,
+        label:
+          clEngine === "llm"
+            ? `LLM (${provider!.name}${provider!.model ? ` · ${provider!.model}` : ""})`
+            : clEngine === "llm-fallback"
+              ? "LLM failed — template fallback"
+              : "Built-in template",
+        providerConfigured: !!provider,
+        providerName: provider?.name || null,
+        providerModel: provider?.model || null,
+        fallbackReason,
+        logs,
+      },
     });
   } catch (err) {
     console.error("AI generate error:", err);
@@ -88,6 +170,55 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+function buildCoverLetterPrompt(ctx: GenerationContext): string {
+  return [
+    `Write a cover letter for the candidate applying to the ${ctx.role} position at ${ctx.company}.`,
+    `Use "${ctx.headerRole}" as the self-description in the opening (i.e., the candidate positions themselves as a ${ctx.headerRole}).`,
+    "",
+    `CANDIDATE NAME: ${ctx.name}`,
+    ctx.summary ? `CANDIDATE SUMMARY (facts — do not invent): ${ctx.summary}` : "",
+    "",
+    "JOB DESCRIPTION:",
+    ctx.jobDescription.slice(0, 6000),
+    "",
+    "Requirements:",
+    `- Address "Dear Hiring Manager," unless a named recipient is in the JD.`,
+    `- Explicitly mention both the role name (${ctx.role}) and the company name (${ctx.company}).`,
+    `- Reflect the header role (${ctx.headerRole}) consistently.`,
+    "- 3–4 short paragraphs, 250–350 words.",
+    `- Sign off with "Sincerely,\\n${ctx.name}".`,
+    "- No contact block at the top (client adds it).",
+    "- Plain text, no markdown.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Compose the final cover letter text: contact block (client-owned) +
+ * LLM-generated body. Keeps layout identical to the deterministic version.
+ */
+function composeCoverLetter(ctx: GenerationContext, body: string): string {
+  const today = new Date().toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+  const lines: string[] = [];
+  lines.push(ctx.name);
+  if (ctx.location) lines.push(ctx.location);
+  if (ctx.email) lines.push(ctx.email);
+  if (ctx.phone) lines.push(ctx.phone);
+  lines.push("");
+  lines.push(today);
+  lines.push("");
+  lines.push("Hiring Manager");
+  lines.push(ctx.company);
+  lines.push("");
+  lines.push(body.trim());
+  return lines.join("\n");
 }
 
 // ── types ──
@@ -102,6 +233,7 @@ interface GenerationContext {
   resumeName: string;
   resumeCategory: string;
   role: string;
+  headerRole: string;
   company: string;
   jobDescription: string;
 }
@@ -220,9 +352,11 @@ function generateCoverLetter(ctx: GenerationContext): string {
   lines.push(`Dear Hiring Manager,`);
   lines.push("");
 
-  // Opening
+  // Opening — uses headerRole as the self-description so the cover letter
+  // stays consistent with the resume header.
+  const selfRole = ctx.headerRole || ctx.role;
   lines.push(
-    `I am writing to express my enthusiastic interest in the ${ctx.role} position at ${ctx.company}. With extensive experience in ${topSkills.slice(0, 3).join(", ").toLowerCase()}, I am confident in my ability to make an immediate and meaningful impact on your team.`
+    `As a ${selfRole}, I am writing to express my enthusiastic interest in the ${ctx.role} position at ${ctx.company}. With extensive experience in ${topSkills.slice(0, 3).join(", ").toLowerCase()}, I am confident in my ability to make an immediate and meaningful impact on your team.`
   );
   lines.push("");
 

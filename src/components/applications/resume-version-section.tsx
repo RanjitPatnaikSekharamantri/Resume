@@ -260,6 +260,12 @@ export function ResumeVersionSection({
                 const isExpanded = expandedId === rv.id;
                 const isEditing = editingId === rv.id;
                 const hasContent = rv.content && rv.content.trim().length > 0;
+                // Active version: the most recent version with content. Its
+                // score is the application's Current Active Resume Score.
+                const activeId = [...resumeVersions]
+                  .sort((a, b) => b.version - a.version)
+                  .find((x) => x.content && x.content.trim().length > 10)?.id;
+                const isActive = rv.id === activeId;
 
                 return (
                   <div
@@ -289,13 +295,18 @@ export function ResumeVersionSection({
                           <FileText className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-sm font-medium text-gray-900">
-                              {rv.isTailored ? "Tailored" : "Base"} Resume v{rv.version}
+                              {rv.isTailored ? "Enhanced" : "Base"} Resume v{rv.version}
                             </p>
+                            {isActive && (
+                              <Badge variant="success" className="text-[9px] px-1.5 py-0">
+                                Active
+                              </Badge>
+                            )}
                             {rv.isTailored && (
                               <Badge variant="info" className="text-[9px] px-1.5 py-0">
-                                AI
+                                Enhanced draft
                               </Badge>
                             )}
                           </div>

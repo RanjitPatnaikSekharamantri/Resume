@@ -51,7 +51,16 @@ interface EnhanceResult {
   enhanced: { sections: SectionData[]; text: string };
   resumeName: string;
   fileName: string;
+  headerRole?: string;
   emphasizeTokens?: string[];
+  scores?: {
+    base: ScoreBreakdown;
+    enhanced: ScoreBreakdown;
+  };
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+  } | null;
   engine?: {
     kind: string;
     label: string;
@@ -59,6 +68,8 @@ interface EnhanceResult {
     providerName: string | null;
     providerModel: string | null;
     note: string;
+    fallbackReason?: string;
+    logs?: string[];
   };
 }
 
@@ -108,16 +119,19 @@ const SECTION_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-type Step = 1 | 2 | 3 | 4 | 5 | 6;
+type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 const STEP_LABELS: Record<Step, string> = {
-  1: "Review context",
-  2: "Current score",
-  3: "Rules",
-  4: "Enhance",
-  5: "Compare",
-  6: "Save",
+  1: "Review",
+  2: "Score",
+  3: "Sections",
+  4: "Rules",
+  5: "Enhance",
+  6: "Compare",
+  7: "Save",
 };
+
+type HeaderRoleMode = "application" | "original" | "custom";
 
 export function EnhanceResume({
   resumes,
@@ -145,8 +159,20 @@ export function EnhanceResume({
 
   const [step, setStep] = useState<Step>(1);
 
+  // Target / header role — the role to display in the resume header and
+  // use in the summary opening + cover letter self-description.
+  const [headerRoleMode, setHeaderRoleMode] = useState<HeaderRoleMode>("application");
+  const [customHeaderRole, setCustomHeaderRole] = useState("");
+  // Resolved effective header role based on the selected mode.
+  const effectiveHeaderRole =
+    headerRoleMode === "application"
+      ? role.trim()
+      : headerRoleMode === "custom"
+        ? customHeaderRole.trim()
+        : ""; // "original" — empty tells the server "don't touch the header"
+
   // Section selection — the user must choose which sections to enhance
-  // before proceeding past step 3.
+  // before proceeding past step 4.
   const [sectionsToEnhance, setSectionsToEnhance] = useState<Set<string>>(new Set());
 
   // Rules
@@ -304,6 +330,7 @@ export function EnhanceResume({
           jobDescription: jobDescription.trim(),
           role: role.trim(),
           company: company.trim(),
+          headerRole: effectiveHeaderRole || undefined,
           sectionsToEnhance: [...sectionsToEnhance],
           rules: {
             noNewSkills,
@@ -326,39 +353,14 @@ export function EnhanceResume({
       setResult(data);
       setPreviewMode("enhanced");
 
-      // Always compute before + after score from the SAME scoring engine,
-      // feeding the SAME base-resume-derived text as the baseline.
-      try {
-        const [bRes, aRes] = await Promise.all([
-          fetch("/api/ai/match-score", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              jobDescription: jobDescription.trim(),
-              resumeText: data.original.text,
-              jobTitle: role.trim(),
-              company: company.trim(),
-            }),
-          }),
-          fetch("/api/ai/match-score", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              jobDescription: jobDescription.trim(),
-              resumeText: data.enhanced.text,
-              jobTitle: role.trim(),
-              company: company.trim(),
-            }),
-          }),
-        ]);
-        if (bRes.ok) setBaselineScore(await bRes.json());
-        if (aRes.ok) setAfterScore(await aRes.json());
-      } catch {
-        /* scoring is non-critical */
-      }
+      // The server returns both base & enhanced scores computed from the
+      // same scoring engine against the same JD, so the UI uses those
+      // directly — no more divergent client-side calls.
+      if (data.scores?.base) setBaselineScore(data.scores.base);
+      if (data.scores?.enhanced) setAfterScore(data.scores.enhanced);
 
       onToast({ message: "Resume enhanced", variant: "success" });
-      setStep(5);
+      setStep(6);
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -470,37 +472,57 @@ export function EnhanceResume({
   };
 
   // ── step gating ──
+  //
+  // 7-step wizard:
+  //   1. Review     — context + target-role selection
+  //   2. Score      — Base Resume Score
+  //   3. Sections   — which sections to enhance
+  //   4. Rules      — rule recommendations + manual overrides
+  //   5. Enhance    — run the enhancement
+  //   6. Compare    — Base vs Enhanced score + preview
+  //   7. Save       — save as ResumeVersion + download
 
   const canAdvanceFrom = useCallback(
     (s: Step): boolean => {
       switch (s) {
         case 1:
-          return contextReady;
+          // Require context + a valid header-role selection when custom.
+          return (
+            contextReady &&
+            (headerRoleMode !== "custom" || customHeaderRole.trim().length > 0)
+          );
         case 2:
           return true;
         case 3:
-          return (
-            sectionsToEnhance.size > 0 &&
-            (recommendation === null || recommendationDecision !== "pending")
-          );
+          return sectionsToEnhance.size > 0;
         case 4:
-          return !!result;
+          return recommendation === null || recommendationDecision !== "pending";
         case 5:
           return !!result;
         case 6:
+          return !!result;
+        case 7:
         default:
           return true;
       }
     },
-    [contextReady, sectionsToEnhance.size, recommendation, recommendationDecision, result]
+    [
+      contextReady,
+      headerRoleMode,
+      customHeaderRole,
+      sectionsToEnhance.size,
+      recommendation,
+      recommendationDecision,
+      result,
+    ]
   );
 
-  const goNext = () => setStep((s) => (s < 6 ? ((s + 1) as Step) : s));
+  const goNext = () => setStep((s) => (s < 7 ? ((s + 1) as Step) : s));
   const goBack = () => setStep((s) => (s > 1 ? ((s - 1) as Step) : s));
 
   const stepper = (
     <div className="flex items-center gap-1 overflow-x-auto pb-1">
-      {([1, 2, 3, 4, 5, 6] as Step[]).map((s, idx) => (
+      {([1, 2, 3, 4, 5, 6, 7] as Step[]).map((s, idx) => (
         <React.Fragment key={s}>
           <button
             type="button"
@@ -539,7 +561,7 @@ export function EnhanceResume({
             </span>
             <span className="hidden sm:inline">{STEP_LABELS[s]}</span>
           </button>
-          {idx < 5 && <ArrowRight className="w-3 h-3 text-gray-300 shrink-0" />}
+          {idx < 6 && <ArrowRight className="w-3 h-3 text-gray-300 shrink-0" />}
         </React.Fragment>
       ))}
     </div>
@@ -595,6 +617,62 @@ export function EnhanceResume({
           {selectedObj && (
             <p className="text-[11px] text-gray-500 mt-1">
               Using: <span className="font-medium text-gray-700">{selectedObj.name}</span>
+            </p>
+          )}
+        </div>
+
+        {/* Target / Header Role control */}
+        <div className="space-y-2 rounded-lg border border-gray-200 p-3 bg-gray-50/40">
+          <div>
+            <Label>Resume header / target role</Label>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              This role appears in the resume header, the profile summary
+              opening, and the cover letter self-description — all kept in
+              sync.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <HeaderRoleOption
+              label="Application role"
+              description={role.trim() || "(none)"}
+              active={headerRoleMode === "application"}
+              onClick={() => setHeaderRoleMode("application")}
+              disabled={!role.trim()}
+            />
+            <HeaderRoleOption
+              label="Keep original"
+              description="Don't change resume header"
+              active={headerRoleMode === "original"}
+              onClick={() => setHeaderRoleMode("original")}
+            />
+            <HeaderRoleOption
+              label="Custom role"
+              description={customHeaderRole.trim() || "enter below"}
+              active={headerRoleMode === "custom"}
+              onClick={() => setHeaderRoleMode("custom")}
+            />
+          </div>
+          {headerRoleMode === "custom" && (
+            <input
+              type="text"
+              value={customHeaderRole}
+              onChange={(e) => setCustomHeaderRole(e.target.value)}
+              placeholder="e.g. Senior Cyber Security Engineer"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+            />
+          )}
+          {effectiveHeaderRole && (
+            <p className="text-[11px] text-gray-600">
+              Effective header role:{" "}
+              <span className="font-semibold text-gray-900">
+                {effectiveHeaderRole}
+              </span>
+            </p>
+          )}
+          {headerRoleMode === "original" && (
+            <p className="text-[11px] text-gray-500">
+              Keeping the original resume header. Summary &amp; cover letter
+              will still reference the target application role.
             </p>
           )}
         </div>
@@ -681,26 +759,29 @@ export function EnhanceResume({
     </Card>
   );
 
-  const renderStep3 = () => (
+  // Step 3 — Sections only.
+  const renderStep3Sections = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
-          <h3 className="text-base font-semibold text-gray-900">Rules & sections</h3>
+          <h3 className="text-base font-semibold text-gray-900">
+            Select sections to enhance
+          </h3>
           <p className="text-xs text-gray-500 mt-0.5">
-            Pick the sections to enhance. Accept, modify, or reject the
-            recommended optimization rules before proceeding.
+            Pick the canonical resume sections you want rewritten. Locked
+            fields (name, contact, employer names, dates, education,
+            certifications) are never modified regardless of which sections
+            you choose.
           </p>
         </div>
 
-        {/* Section picker */}
         <div>
-          <Label>Select sections to enhance</Label>
-          <div className="space-y-1.5 mt-1.5">
+          <div className="space-y-1.5">
             {SECTION_CHOICES.map(({ kind, label }) => (
               <label
                 key={kind}
                 className={cn(
-                  "flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all",
+                  "flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-all",
                   sectionsToEnhance.has(kind)
                     ? "border-blue-200 bg-blue-50/50"
                     : "border-gray-200 bg-white hover:bg-gray-50"
@@ -712,12 +793,20 @@ export function EnhanceResume({
                   onChange={() => toggleSection(kind)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <span className="text-sm font-medium text-gray-900">{label}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900">{label}</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {kind === "summary" && "Paragraph opening your resume."}
+                    {kind === "skills" && "\"· Category: tool1, tool2, …\" bullets."}
+                    {kind === "experience" && "Role/company headers + bullets under the most recent roles."}
+                    {kind === "certifications" && "Certification list — only re-ordered, never invented."}
+                  </p>
+                </div>
               </label>
             ))}
             <label
               className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all",
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-all",
                 isFullResumeSelected
                   ? "border-emerald-200 bg-emerald-50/50"
                   : "border-gray-200 bg-white hover:bg-gray-50"
@@ -740,14 +829,40 @@ export function EnhanceResume({
             </label>
           </div>
           {sectionsToEnhance.size === 0 && (
-            <p className="text-[11px] text-amber-700 mt-2">
+            <p className="text-[11px] text-amber-700 mt-3">
               Pick at least one section to continue.
             </p>
           )}
         </div>
 
+        <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50/60 border border-amber-200/60">
+          <ShieldCheck className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-800 leading-relaxed">
+            <span className="font-semibold">Preserved:</span> Name, contact
+            details, company names, dates, education, and certifications are
+            never modified.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  // Step 4 — Rules + recommendations.
+  const renderStep4Rules = () => (
+    <Card>
+      <CardContent className="p-6 space-y-5">
+        <div>
+          <h3 className="text-base font-semibold text-gray-900">
+            Optimization rules
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Accept, modify, or reject the recommended rules. You can always
+            fine-tune manually below.
+          </p>
+        </div>
+
         {/* Rule recommendations */}
-        <div className="border-t border-gray-100 pt-4">
+        <div>
           <div className="flex items-center justify-between mb-2">
             <Label>Recommended optimization rules</Label>
             {!recommendation ? (
@@ -935,34 +1050,34 @@ export function EnhanceResume({
             }}
           />
         </div>
-
-        <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50/60 border border-amber-200/60">
-          <ShieldCheck className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-amber-800 leading-relaxed">
-            <span className="font-semibold">Preserved:</span> Name, contact
-            details, company names, dates, education, and certifications are
-            never modified.
-          </p>
-        </div>
       </CardContent>
     </Card>
   );
 
-  const renderStep4 = () => (
+  // Step 5 — Enhance trigger.
+  const renderStep5Enhance = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
           <h3 className="text-base font-semibold text-gray-900">Enhance resume</h3>
           <p className="text-xs text-gray-500 mt-0.5">
             Applies the selected rules to the chosen sections, preserving the
-            base resume structure (PROFILE SUMMARY → TECHNICAL SKILLS →
-            EDUCATION → WORK EXPERIENCE → CERTIFICATIONS).
+            base resume structure (PROFILE SUMMARY: → TECHNICAL SKILLS: →
+            EDUCATION: → WORK EXPERIENCE: → CERTIFICATIONS:).
           </p>
         </div>
 
         <div className="rounded-lg border border-gray-200 bg-gray-50/40 p-4 space-y-2">
           <SummaryRow label="Base resume" value={selectedObj?.name || "—"} />
-          <SummaryRow label="Target role" value={role} />
+          <SummaryRow label="Application role" value={role} />
+          <SummaryRow
+            label="Header role"
+            value={
+              headerRoleMode === "original"
+                ? "(keep original from base resume)"
+                : effectiveHeaderRole || "—"
+            }
+          />
           <SummaryRow label="Target company" value={company} />
           <SummaryRow
             label="Sections"
@@ -1007,7 +1122,8 @@ export function EnhanceResume({
     </Card>
   );
 
-  const renderStep5 = () => {
+  // Step 6 — Compare scores + preview.
+  const renderStep6Compare = () => {
     if (!result) {
       return (
         <Card>
@@ -1099,7 +1215,7 @@ export function EnhanceResume({
                   variant="primary"
                   size="sm"
                   className="h-7 shrink-0"
-                  onClick={() => setStep(3)}
+                  onClick={() => setStep(4)}
                 >
                   Adjust rules
                 </Button>
@@ -1178,7 +1294,8 @@ export function EnhanceResume({
     );
   };
 
-  const renderStep6 = () => (
+  // Step 7 — Save + download.
+  const renderStep7Save = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
@@ -1265,19 +1382,20 @@ export function EnhanceResume({
 
       {step === 1 && renderStep1()}
       {step === 2 && renderStep2()}
-      {step === 3 && renderStep3()}
-      {step === 4 && renderStep4()}
-      {step === 5 && renderStep5()}
-      {step === 6 && renderStep6()}
+      {step === 3 && renderStep3Sections()}
+      {step === 4 && renderStep4Rules()}
+      {step === 5 && renderStep5Enhance()}
+      {step === 6 && renderStep6Compare()}
+      {step === 7 && renderStep7Save()}
 
       <div className="flex items-center justify-between">
         <Button variant="outline" size="sm" onClick={goBack} disabled={step === 1}>
           <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
           Back
         </Button>
-        {step < 6 && (
+        {step < 7 && (
           <Button
-            variant={step === 4 ? "outline" : "primary"}
+            variant={step === 5 ? "outline" : "primary"}
             size="sm"
             onClick={goNext}
             disabled={nextDisabled}
@@ -1359,6 +1477,40 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
       <span className="text-gray-500">{label}</span>
       <span className="text-gray-900 font-medium truncate max-w-[60%] text-right">{value}</span>
     </div>
+  );
+}
+
+function HeaderRoleOption({
+  label,
+  description,
+  active,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  description: string;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "flex flex-col items-start gap-0.5 px-3 py-2 rounded-lg border text-left transition-all",
+        active
+          ? "border-blue-300 bg-blue-50/60"
+          : "border-gray-200 bg-white hover:bg-gray-50",
+        disabled && "opacity-50 cursor-not-allowed"
+      )}
+    >
+      <span className="text-xs font-semibold text-gray-900">{label}</span>
+      <span className="text-[11px] text-gray-500 truncate max-w-full">
+        {description}
+      </span>
+    </button>
   );
 }
 
