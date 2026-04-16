@@ -4,10 +4,13 @@ import React, { useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { Sparkles, AlertCircle, Eye, EyeOff, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Turnstile } from "@/components/ui/turnstile";
+
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
 const PASSWORD_MIN_LENGTH = 8;
 
@@ -42,6 +45,8 @@ export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [verificationSent, setVerificationSent] = useState(false);
 
   const strength = password ? getPasswordStrength(password) : null;
   const passwordsMatch = confirmPassword
@@ -88,6 +93,7 @@ export default function SignupPage() {
           name: trimmedName,
           email: trimmedEmail,
           password,
+          captchaToken: captchaToken || undefined,
         }),
       });
 
@@ -99,7 +105,12 @@ export default function SignupPage() {
         return;
       }
 
-      // Auto-login after successful registration
+      if (data.requiresVerification) {
+        setVerificationSent(true);
+        setLoading(false);
+        return;
+      }
+
       const signInResult = await signIn("credentials", {
         email: trimmedEmail,
         password,
@@ -107,7 +118,6 @@ export default function SignupPage() {
       });
 
       if (signInResult?.error) {
-        // Fallback: redirect to login with success message
         router.push("/login?registered=true");
       } else {
         router.push("/dashboard");
@@ -133,6 +143,19 @@ export default function SignupPage() {
           </div>
         </div>
 
+        {verificationSent ? (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-8 text-center">
+            <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-4" />
+            <h1 className="text-lg font-semibold text-gray-900">Check your email</h1>
+            <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+              We sent a verification link to <span className="font-medium text-gray-700">{email}</span>. Click the link to verify your account.
+            </p>
+            <p className="text-xs text-gray-400 mt-4">The link expires in 24 hours.</p>
+            <Link href="/login">
+              <Button variant="outline" className="mt-6">Go to Sign in</Button>
+            </Link>
+          </div>
+        ) : (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
           <div className="mb-6">
             <h1 className="text-lg font-semibold text-gray-900">
@@ -244,11 +267,21 @@ export default function SignupPage() {
               )}
             </div>
 
+            {TURNSTILE_SITE_KEY && (
+              <div className="flex justify-center">
+                <Turnstile
+                  siteKey={TURNSTILE_SITE_KEY}
+                  onVerify={setCaptchaToken}
+                  onExpire={() => setCaptchaToken("")}
+                />
+              </div>
+            )}
+
             <Button
               type="submit"
               variant="primary"
               className="w-full"
-              disabled={loading || !passwordsMatch}
+              disabled={loading || !passwordsMatch || (!!TURNSTILE_SITE_KEY && !captchaToken)}
             >
               {loading ? (
                 <span className="flex items-center gap-2">
@@ -261,6 +294,7 @@ export default function SignupPage() {
             </Button>
           </form>
         </div>
+        )}
 
         <p className="mt-4 text-center text-sm text-gray-500">
           Already have an account?{" "}

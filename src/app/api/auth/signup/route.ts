@@ -1,16 +1,60 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import {
+  generateVerificationToken,
+  getTokenExpiry,
+  sendVerificationEmail,
+} from "@/lib/email";
 
 const PASSWORD_MIN_LENGTH = 8;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
+
+async function verifyCaptcha(token: string): Promise<boolean> {
+  if (!TURNSTILE_SECRET) return true;
+
+  try {
+    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        secret: TURNSTILE_SECRET,
+        response: token,
+      }),
+    });
+    const data = await res.json();
+    return data.success === true;
+  } catch {
+    console.error("CAPTCHA verification failed");
+    return false;
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { name, email, password } = body;
+    const { name, email, password, captchaToken } = body;
 
-    // Validate required fields
+    // CAPTCHA verification (when configured)
+    if (TURNSTILE_SECRET) {
+      if (!captchaToken) {
+        return NextResponse.json(
+          { error: "CAPTCHA verification is required" },
+          { status: 400 }
+        );
+      }
+
+      const captchaValid = await verifyCaptcha(captchaToken);
+      if (!captchaValid) {
+        return NextResponse.json(
+          { error: "CAPTCHA verification failed. Please try again." },
+          { status: 403 }
+        );
+      }
+    }
+
     if (!email || !password) {
       return NextResponse.json(
         { error: "Email and password are required" },
@@ -21,7 +65,6 @@ export async function POST(req: Request) {
     const trimmedEmail = email.toLowerCase().trim();
     const trimmedName = name?.trim() || "";
 
-    // Validate email format
     if (!EMAIL_REGEX.test(trimmedEmail)) {
       return NextResponse.json(
         { error: "Please enter a valid email address" },
@@ -29,7 +72,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Validate password strength
     if (password.length < PASSWORD_MIN_LENGTH) {
       return NextResponse.json(
         { error: `Password must be at least ${PASSWORD_MIN_LENGTH} characters` },
@@ -37,7 +79,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Validate name
     if (!trimmedName || trimmedName.length < 2) {
       return NextResponse.json(
         { error: "Full name is required (at least 2 characters)" },
@@ -52,7 +93,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Enforce optional user limit (set MAX_USERS env var to enable)
+    // Optional user limit
     const maxUsersEnv = process.env.MAX_USERS;
     if (maxUsersEnv) {
       const limit = Number(maxUsersEnv);
@@ -67,7 +108,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Check for existing user
     const existingUser = await prisma.user.findUnique({
       where: { email: trimmedEmail },
     });
@@ -79,27 +119,45 @@ export async function POST(req: Request) {
       );
     }
 
-    // Hash password and create user + profile in a transaction
     const hashedPassword = await bcrypt.hash(password, 12);
+    const verificationToken = generateVerificationToken();
+    const verificationTokenExpiry = getTokenExpiry();
+
+    // Check if email verification is enabled
+    const emailVerificationEnabled = !!(
+      process.env.RESEND_API_KEY || process.env.ENABLE_EMAIL_VERIFICATION === "true"
+    );
 
     const user = await prisma.user.create({
       data: {
         name: trimmedName,
         email: trimmedEmail,
         hashedPassword,
-        profile: {
-          create: {},
-        },
+        isVerified: !emailVerificationEnabled,
+        verificationToken: emailVerificationEnabled ? verificationToken : null,
+        verificationTokenExpiry: emailVerificationEnabled ? verificationTokenExpiry : null,
+        profile: { create: {} },
       },
       select: {
         id: true,
         name: true,
         email: true,
+        isVerified: true,
         createdAt: true,
       },
     });
 
-    return NextResponse.json({ user }, { status: 201 });
+    if (emailVerificationEnabled) {
+      await sendVerificationEmail(trimmedEmail, trimmedName, verificationToken);
+    }
+
+    return NextResponse.json(
+      {
+        user,
+        requiresVerification: emailVerificationEnabled && !user.isVerified,
+      },
+      { status: 201 }
+    );
   } catch (error) {
     console.error("Signup error:", error);
     return NextResponse.json(
