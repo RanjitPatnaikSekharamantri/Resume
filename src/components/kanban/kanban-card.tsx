@@ -58,12 +58,13 @@ export function KanbanCard({ card, overlay }: KanbanCardProps) {
       ref={setNodeRef}
       style={style}
       className={cn(
-        "bg-white rounded-lg border p-3 transition-all group select-none",
+        "bg-white border p-3 transition-all group select-none",
         isDragging
           ? "opacity-40 border-blue-300 shadow-none"
           : "border-gray-200 shadow-sm hover:shadow-md",
         overlay &&
-          "shadow-xl border-blue-400 rotate-[2deg] scale-105 cursor-grabbing"
+          "shadow-xl border-blue-400 rotate-[2deg] scale-105 cursor-grabbing",
+        "rounded-xl"
       )}
     >
       <div className="flex items-start gap-2">

@@ -129,6 +129,9 @@ model Application {
   resumeVersions    ResumeVersion[]
   coverLetters      CoverLetterVersion[]
   activities        Activity[]
+
+  @@index([userId, status])
+  @@index([userId, updatedAt])
 }
 
 model ResumeVersion {
@@ -147,6 +150,8 @@ model ResumeVersion {
 
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   baseResume  BaseResume? @relation(fields: [baseResumeId], references: [id], onDelete: SetNull)
+
+  @@index([applicationId])
 }
 
 model CoverLetterVersion {
@@ -162,6 +167,8 @@ model CoverLetterVersion {
   updatedAt     DateTime @updatedAt
 
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
 }
 
 model Activity {
@@ -173,6 +180,8 @@ model Activity {
   createdAt     DateTime @default(now())
 
   application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, createdAt])
 }
 
 model AIProvider {

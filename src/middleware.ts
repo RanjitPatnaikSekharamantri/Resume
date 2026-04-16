@@ -15,9 +15,11 @@ const protectedPaths = [
 const protectedApiPaths = [
   "/api/applications",
   "/api/resumes",
+  "/api/resume-versions",
   "/api/profile",
   "/api/cover-letters",
   "/api/ai",
+  "/api/ai-providers",
   "/api/analytics",
 ];
 
@@ -73,6 +75,8 @@ export const config = {
     "/api/profile/:path*",
     "/api/cover-letters/:path*",
     "/api/ai/:path*",
+    "/api/ai-providers/:path*",
+    "/api/resume-versions/:path*",
     "/api/analytics/:path*",
   ],
 };

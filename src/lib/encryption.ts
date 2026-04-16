@@ -1,16 +1,25 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import { createCipheriv, createDecipheriv, randomBytes, createHash } from "crypto";
 
 const ALGORITHM = "aes-256-gcm";
-const KEY = Buffer.from(
-  (process.env.ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET || "").padEnd(
-    32,
-    "0"
-  ).slice(0, 32)
-);
+
+function deriveKey(): Buffer {
+  const secret = process.env.ENCRYPTION_KEY || process.env.NEXTAUTH_SECRET || "";
+  if (!secret) {
+    throw new Error("ENCRYPTION_KEY or NEXTAUTH_SECRET must be set");
+  }
+  return createHash("sha256").update(secret).digest();
+}
+
+let _key: Buffer | null = null;
+function getKey(): Buffer {
+  if (!_key) _key = deriveKey();
+  return _key;
+}
 
 export function encrypt(text: string): string {
+  const key = getKey();
   const iv = randomBytes(16);
-  const cipher = createCipheriv(ALGORITHM, KEY, iv);
+  const cipher = createCipheriv(ALGORITHM, key, iv);
   let encrypted = cipher.update(text, "utf8", "hex");
   encrypted += cipher.final("hex");
   const authTag = cipher.getAuthTag().toString("hex");
@@ -18,10 +27,11 @@ export function encrypt(text: string): string {
 }
 
 export function decrypt(encryptedText: string): string {
+  const key = getKey();
   const [ivHex, authTagHex, encrypted] = encryptedText.split(":");
   const iv = Buffer.from(ivHex, "hex");
   const authTag = Buffer.from(authTagHex, "hex");
-  const decipher = createDecipheriv(ALGORITHM, KEY, iv);
+  const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encrypted, "hex", "utf8");
   decrypted += decipher.final("utf8");
