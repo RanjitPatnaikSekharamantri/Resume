@@ -197,21 +197,24 @@ export default function ProfilePage() {
       if (data.user?.name) {
         setName(data.user.name);
         setSavedName(data.user.name);
+      } else if (session?.user?.name) {
+        setName(session.user.name);
+        setSavedName(session.user.name);
       }
     } catch {
       // ignore
     } finally {
       setLoading(false);
     }
+    // session is a ref for fallback only; excluding it avoids refetching on every session tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Fetch once on mount. Re-fetching on every keystroke was overwriting local edits
+  // (it used to watch `name`), which made the Full Name field appear un-editable.
   useEffect(() => {
-    if (session?.user?.name && !name) {
-      setName(session.user.name);
-      setSavedName(session.user.name);
-    }
     fetchProfile();
-  }, [session, fetchProfile, name]);
+  }, [fetchProfile]);
 
   const updateField = (field: keyof ProfileData, value: string) => {
     setProfile((prev) => ({ ...prev, [field]: value }));
@@ -274,21 +277,25 @@ export default function ProfilePage() {
   }
 
   // ── completeness indicator ──
-
-  const filledCount = [
+  //
+  // Only required (core) fields count toward the profile-completeness %.
+  // Optional fields (LinkedIn, GitHub, website, portfolio, equal-opportunity
+  // answers, salary, preferred location) are intentionally excluded so the
+  // bar doesn't mislead users into thinking they're incomplete when they're
+  // not.
+  const REQUIRED_FIELDS: (string | undefined | null)[] = [
     name,
     profile.phone,
     profile.location,
     profile.summary,
-    profile.linkedIn,
-    profile.github,
-    profile.website,
     profile.workAuthorization,
     profile.preferredRole,
-    profile.salaryExpectation,
     profile.remotePreference,
-  ].filter(Boolean).length;
-  const totalFields = 11;
+  ];
+  const filledCount = REQUIRED_FIELDS.filter(
+    (v) => typeof v === "string" && v.trim().length > 0
+  ).length;
+  const totalFields = REQUIRED_FIELDS.length;
   const completeness = Math.round((filledCount / totalFields) * 100);
 
   return (

@@ -11,7 +11,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import {
-  Shield, Key, Trash2, Plus, Loader2, Pencil,
+  Shield, Key, Trash2, Plus, Loader2, Pencil, Mail, Lock,
 } from "lucide-react";
 import { ToastNotification, type ToastData } from "@/components/ui/toast-notification";
 import {
@@ -35,8 +35,21 @@ interface Provider {
 
 
 export default function SettingsPage() {
-  const { data: session } = useSession();
+  const { data: session, update: updateSession } = useSession();
   const [timezone, setTimezoneState] = useState("auto");
+
+  // Email change dialog
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailNew, setEmailNew] = useState("");
+  const [emailPassword, setEmailPassword] = useState("");
+  const [emailSaving, setEmailSaving] = useState(false);
+
+  // Password change dialog
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -121,6 +134,69 @@ export default function SettingsPage() {
     fetchProviders();
   };
 
+  // ── change email ──
+
+  const handleChangeEmail = async () => {
+    if (!emailNew.trim() || !emailPassword) return;
+    setEmailSaving(true);
+    try {
+      const res = await fetch("/api/account/email", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newEmail: emailNew.trim(), currentPassword: emailPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setToast({ message: data.error || "Failed to change email", variant: "error" });
+        return;
+      }
+      await updateSession({ email: emailNew.trim() });
+      setEmailOpen(false);
+      setEmailNew("");
+      setEmailPassword("");
+      setToast({
+        message: data.message || "Email updated",
+        variant: "success",
+      });
+    } catch {
+      setToast({ message: "Failed to change email", variant: "error" });
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  // ── change password ──
+
+  const handleChangePassword = async () => {
+    if (!pwCurrent || !pwNew) return;
+    if (pwNew !== pwConfirm) {
+      setToast({ message: "New passwords don't match", variant: "error" });
+      return;
+    }
+    setPwSaving(true);
+    try {
+      const res = await fetch("/api/account/password", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: pwCurrent, newPassword: pwNew }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setToast({ message: data.error || "Failed to change password", variant: "error" });
+        return;
+      }
+      setPwOpen(false);
+      setPwCurrent("");
+      setPwNew("");
+      setPwConfirm("");
+      setToast({ message: data.message || "Password updated", variant: "success" });
+    } catch {
+      setToast({ message: "Failed to change password", variant: "error" });
+    } finally {
+      setPwSaving(false);
+    }
+  };
+
   const [testing, setTesting] = useState<string | null>(null);
   const handleTest = async (p: Provider) => {
     setTesting(p.id);
@@ -145,9 +221,43 @@ export default function SettingsPage() {
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5"><Label>Name</Label><Input value={session?.user?.name || ""} disabled className="bg-gray-50" /></div>
-              <div className="space-y-1.5"><Label>Email</Label><Input value={session?.user?.email || ""} disabled className="bg-gray-50" /></div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label>Email</Label>
+                  <button
+                    type="button"
+                    onClick={() => { setEmailNew(""); setEmailPassword(""); setEmailOpen(true); }}
+                    className="text-[11px] text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    Change
+                  </button>
+                </div>
+                <Input value={session?.user?.email || ""} disabled className="bg-gray-50" />
+              </div>
             </div>
             <p className="text-xs text-gray-500 mt-3">To update your name, visit the Profile page.</p>
+
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="flex items-center justify-between p-3 rounded-lg border border-gray-100 hover:bg-gray-50/50 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center">
+                    <Lock className="w-4 h-4 text-gray-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">Password</p>
+                    <p className="text-xs text-gray-500">Update your password regularly for security</p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setPwCurrent(""); setPwNew(""); setPwConfirm(""); setPwOpen(true); }}
+                >
+                  Change Password
+                </Button>
+              </div>
+            </div>
+
             <div className="mt-4 pt-4 border-t border-gray-100">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
@@ -270,6 +380,131 @@ export default function SettingsPage() {
             <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete} disabled={deleting}>
               {deleting ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Deleting...</> : <><Trash2 className="w-4 h-4 mr-2" /> Delete</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Change Email Dialog */}
+      <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="w-4 h-4 text-gray-500" />
+              Change Email Address
+            </DialogTitle>
+            <DialogDescription>
+              Enter your new email and current password. If email verification is
+              enabled, you'll need to re-verify the new address before signing in again.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Current Email</Label>
+              <Input value={session?.user?.email || ""} disabled className="bg-gray-50" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="new-email">New Email</Label>
+              <Input
+                id="new-email"
+                type="email"
+                value={emailNew}
+                onChange={(e) => setEmailNew(e.target.value)}
+                placeholder="new@example.com"
+                autoComplete="email"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="email-current-pw">Current Password</Label>
+              <Input
+                id="email-current-pw"
+                type="password"
+                value={emailPassword}
+                onChange={(e) => setEmailPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="current-password"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEmailOpen(false)} disabled={emailSaving}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleChangeEmail}
+              disabled={emailSaving || !emailNew.trim() || !emailPassword}
+            >
+              {emailSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Updating...</> : "Update Email"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Change Password Dialog */}
+      <Dialog open={pwOpen} onOpenChange={setPwOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Lock className="w-4 h-4 text-gray-500" />
+              Change Password
+            </DialogTitle>
+            <DialogDescription>
+              Enter your current password and choose a new one (8+ characters).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="pw-current">Current Password</Label>
+              <Input
+                id="pw-current"
+                type="password"
+                value={pwCurrent}
+                onChange={(e) => setPwCurrent(e.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pw-new">New Password</Label>
+              <Input
+                id="pw-new"
+                type="password"
+                value={pwNew}
+                onChange={(e) => setPwNew(e.target.value)}
+                placeholder="At least 8 characters"
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pw-confirm">Confirm New Password</Label>
+              <Input
+                id="pw-confirm"
+                type="password"
+                value={pwConfirm}
+                onChange={(e) => setPwConfirm(e.target.value)}
+                autoComplete="new-password"
+              />
+              {pwConfirm && pwNew !== pwConfirm && (
+                <p className="text-[11px] text-red-600">Passwords don&apos;t match</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPwOpen(false)} disabled={pwSaving}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleChangePassword}
+              disabled={
+                pwSaving ||
+                !pwCurrent ||
+                !pwNew ||
+                pwNew.length < 8 ||
+                pwNew !== pwConfirm
+              }
+            >
+              {pwSaving ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Updating...</> : "Update Password"}
             </Button>
           </DialogFooter>
         </DialogContent>

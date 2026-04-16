@@ -49,6 +49,11 @@ import {
   FilePlus,
   RefreshCw,
   StickyNote,
+  Wand2,
+  Mail,
+  Send,
+  TrendingUp,
+  Zap,
 } from "lucide-react";
 import {
   getStatusLabel,
@@ -259,6 +264,143 @@ export default function ApplicationDetailPage() {
 
   const handleCoverLetterToast = (msg: string, variant: "success" | "error") => {
     setToast({ message: msg, variant });
+  };
+
+  // ── quick actions ──
+
+  const [recalculating, setRecalculating] = useState(false);
+  const [generatingCoverLetter, setGeneratingCoverLetter] = useState(false);
+
+  // Pick a default base resume if the application has any linked versions
+  const linkedBaseResumeId = React.useMemo(() => {
+    if (!app) return null;
+    const linked = app.resumeVersions.find((rv) => rv.baseResumeId);
+    return linked?.baseResumeId || null;
+  }, [app]);
+
+  const handleRecalcScore = async () => {
+    if (!app || !app.jobDescription) {
+      setToast({ message: "Add a job description to calculate a match score", variant: "error" });
+      return;
+    }
+    setRecalculating(true);
+    try {
+      // Use the currently-active resume content if any version exists
+      const activeRv = app.resumeVersions.find((rv) => rv.content);
+      let resumeText = activeRv?.content || "";
+
+      // Fall back to base resume + profile summary
+      if (!resumeText) {
+        const profRes = await fetch("/api/profile");
+        if (profRes.ok) {
+          const prof = await profRes.json();
+          resumeText = [prof?.summary, prof?.preferredRole, app.jobTitle]
+            .filter(Boolean)
+            .join(" ");
+        }
+      }
+
+      if (!resumeText || resumeText.length < 10) {
+        setToast({ message: "No resume content available to score", variant: "error" });
+        return;
+      }
+
+      const res = await fetch("/api/ai/match-score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationId: app.id,
+          jobDescription: app.jobDescription,
+          resumeText,
+          jobTitle: app.jobTitle,
+          company: app.company,
+        }),
+      });
+      if (!res.ok) {
+        setToast({ message: "Recalculation failed", variant: "error" });
+        return;
+      }
+      const data = await res.json();
+      setToast({ message: `Match score recalculated: ${data.overallScore}%`, variant: "success" });
+      fetchApp();
+    } catch {
+      setToast({ message: "Recalculation failed", variant: "error" });
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  const handleMarkApplied = async () => {
+    if (!app) return;
+    try {
+      const res = await fetch(`/api/applications/${app.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "applied" }),
+      });
+      if (res.ok) {
+        setToast({ message: "Marked as Applied", variant: "success" });
+        fetchApp();
+      }
+    } catch {
+      setToast({ message: "Failed to mark as applied", variant: "error" });
+    }
+  };
+
+  const handleGenerateCoverLetter = async () => {
+    if (!app) return;
+    if (!app.jobDescription) {
+      setToast({ message: "Add a job description first", variant: "error" });
+      return;
+    }
+    setGeneratingCoverLetter(true);
+    try {
+      const genRes = await fetch("/api/ai/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobDescription: app.jobDescription,
+          role: app.jobTitle,
+          company: app.company,
+          baseResumeId: linkedBaseResumeId,
+          type: "cover_letter",
+        }),
+      });
+      if (!genRes.ok) {
+        setToast({ message: "Cover letter generation failed", variant: "error" });
+        return;
+      }
+      const data = await genRes.json();
+      await fetch("/api/cover-letters", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationId: app.id,
+          jobTitle: app.jobTitle,
+          company: app.company,
+          content: data.content,
+        }),
+      });
+      setToast({ message: "Cover letter generated", variant: "success" });
+      fetchApp();
+    } catch {
+      setToast({ message: "Cover letter generation failed", variant: "error" });
+    } finally {
+      setGeneratingCoverLetter(false);
+    }
+  };
+
+  const buildTailorUrl = () => {
+    if (!app) return "/ai-studio";
+    const params = new URLSearchParams({
+      applicationId: app.id,
+      role: app.jobTitle,
+      company: app.company,
+      jd: app.jobDescription || "",
+      mode: "enhance",
+    });
+    if (linkedBaseResumeId) params.set("resumeId", linkedBaseResumeId);
+    return `/ai-studio?${params.toString()}`;
   };
 
   // ── loading ──
@@ -546,13 +688,46 @@ export default function ApplicationDetailPage() {
         {/* Sidebar */}
         <div className="space-y-4">
           {app.matchScore != null ? (
-            <MatchScoreCard
-              overallScore={app.matchScore}
-              skillsMatch={app.skillsMatch}
-              experienceMatch={app.experienceMatch}
-              keywordCoverage={app.keywordCoverage}
-              domainMatch={app.domainMatch}
-            />
+            <>
+              <div>
+                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+                  Current Active Resume Score
+                </p>
+                <MatchScoreCard
+                  overallScore={app.matchScore}
+                  skillsMatch={app.skillsMatch}
+                  experienceMatch={app.experienceMatch}
+                  keywordCoverage={app.keywordCoverage}
+                  domainMatch={app.domainMatch}
+                />
+              </div>
+              {app.matchScore < 95 && (
+                <Card className="border-amber-200 bg-amber-50/50">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                        <TrendingUp className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-amber-900">
+                          Score below target ({app.matchScore}% / 95%)
+                        </p>
+                        <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                          Enhance this resume to improve keyword coverage,
+                          skills overlap and experience alignment.
+                        </p>
+                        <Link href={buildTailorUrl()}>
+                          <Button variant="primary" size="sm" className="mt-2.5 h-8">
+                            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                            Improve Match
+                          </Button>
+                        </Link>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </>
           ) : (
             <Card>
               <CardContent className="p-5 text-center">
@@ -562,6 +737,69 @@ export default function ApplicationDetailPage() {
               </CardContent>
             </Card>
           )}
+
+          {/* ── Quick Actions ── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Zap className="w-4 h-4 text-blue-600" />
+                Quick Actions
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Link href={buildTailorUrl()}>
+                <Button variant="primary" size="sm" className="w-full justify-start h-9">
+                  <Sparkles className="w-3.5 h-3.5 mr-2" />
+                  Tailor / Enhance Resume
+                </Button>
+              </Link>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start h-9"
+                onClick={handleGenerateCoverLetter}
+                disabled={generatingCoverLetter || !app.jobDescription}
+              >
+                {generatingCoverLetter ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                ) : (
+                  <Mail className="w-3.5 h-3.5 mr-2" />
+                )}
+                Generate Cover Letter
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start h-9"
+                onClick={handleRecalcScore}
+                disabled={recalculating || !app.jobDescription}
+              >
+                {recalculating ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5 mr-2" />
+                )}
+                Recalculate Match Score
+              </Button>
+              {app.status !== "applied" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start h-9"
+                  onClick={handleMarkApplied}
+                >
+                  <Send className="w-3.5 h-3.5 mr-2" />
+                  Mark Applied
+                </Button>
+              )}
+              {!app.jobDescription && (
+                <p className="text-[11px] text-gray-400 leading-relaxed mt-2">
+                  Add a job description in the Overview tab to unlock tailoring
+                  and score actions.
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader className="pb-3">

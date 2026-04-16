@@ -383,6 +383,24 @@ export default function ResumeLibraryPage() {
         }
       />
 
+      {/* ── Section header: Base Resumes ── */}
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+            <FileText className="w-4 h-4 text-blue-600" />
+            Base Resumes
+            <Badge variant="secondary" className="text-[10px]">
+              {resumes.length}
+            </Badge>
+          </h2>
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            Your permanent originals. Uploaded files are never overwritten —
+            every enhancement or tailoring is saved as a separate Resume
+            Version under the matching application.
+          </p>
+        </div>
+      </div>
+
       {/* ── empty state ── */}
       {resumes.length === 0 ? (
         <Card>
@@ -420,6 +438,52 @@ export default function ResumeLibraryPage() {
               onDownload={() => handleDownload(resume)}
             />
           ))}
+        </div>
+      )}
+
+      {/* ── Application Resume Versions roll-up ── */}
+      {resumes.some((r) => (r.resumeVersions?.length ?? 0) > 0) && (
+        <div className="mt-10">
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+              <Briefcase className="w-4 h-4 text-purple-600" />
+              Application Resume Versions
+            </h2>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              Tailored / enhanced resumes linked to specific applications.
+              These are separate from your base resumes.
+            </p>
+          </div>
+          <Card>
+            <CardContent className="p-0 divide-y divide-gray-100">
+              {resumes.flatMap((r) =>
+                (r.resumeVersions || []).map((rv) => (
+                  <Link
+                    key={`${r.id}-${rv.applicationId}`}
+                    href={`/applications/${rv.applicationId}`}
+                    className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/50 transition-colors group"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
+                        <Briefcase className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate group-hover:text-blue-600 transition-colors">
+                          {rv.application.jobTitle} at {rv.application.company}
+                        </p>
+                        <p className="text-[11px] text-gray-500">
+                          Based on: {r.name}
+                        </p>
+                      </div>
+                    </div>
+                    <Badge variant="secondary" className="text-[10px] shrink-0">
+                      Application Version
+                    </Badge>
+                  </Link>
+                ))
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
