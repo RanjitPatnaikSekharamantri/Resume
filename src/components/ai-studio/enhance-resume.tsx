@@ -329,6 +329,7 @@ export function EnhanceResume({
             company: company.trim(),
             jobDescription: jobDescription.trim(),
             status: "not_applied",
+            baseResumeId: selectedResume || undefined,
           }),
         });
         if (!appRes.ok) { onToast({ message: "Failed to create application", variant: "error" }); return; }

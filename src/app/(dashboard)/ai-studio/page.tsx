@@ -288,6 +288,7 @@ export default function AIStudioPage() {
           company: company.trim(),
           jobDescription: jobDescription.trim(),
           status: "not_applied",
+          baseResumeId: selectedResume || undefined,
         }),
       });
 
