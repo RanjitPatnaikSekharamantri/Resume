@@ -63,12 +63,19 @@ const EMPTY_FORM: ApplicationFormData = {
   notes: "",
 };
 
+interface ResumeOption {
+  id: string;
+  name: string;
+  roleCategory: string | null;
+}
+
 interface ApplicationFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (data: ApplicationFormData) => Promise<void>;
   initialData?: Partial<ApplicationFormData>;
   mode?: "create" | "edit";
+  resumes?: ResumeOption[];
 }
 
 export function ApplicationForm({
@@ -77,7 +84,9 @@ export function ApplicationForm({
   onSubmit,
   initialData,
   mode = "create",
+  resumes = [],
 }: ApplicationFormProps) {
+  const [selectedResumeId, setSelectedResumeId] = useState("");
   const [form, setForm] = useState<ApplicationFormData>(EMPTY_FORM);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -95,6 +104,7 @@ export function ApplicationForm({
         setForm(EMPTY_FORM);
       }
       setError("");
+      setSelectedResumeId(initialData?.baseResumeId || "");
     }
   }, [open, initialData]);
 
@@ -116,7 +126,9 @@ export function ApplicationForm({
 
     setLoading(true);
     try {
-      await onSubmit(form);
+      const submitData = { ...form };
+      if (selectedResumeId) submitData.baseResumeId = selectedResumeId;
+      await onSubmit(submitData);
       onOpenChange(false);
     } catch {
       setError("Something went wrong. Please try again.");
@@ -262,6 +274,28 @@ export function ApplicationForm({
               />
             </div>
           </div>
+
+          {/* Base Resume */}
+          {resumes.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Base Resume</Label>
+              <Select value={selectedResumeId} onValueChange={setSelectedResumeId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Link a base resume (optional)" />
+                </SelectTrigger>
+                <SelectContent>
+                  {resumes.map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {r.name}
+                      {r.roleCategory && (
+                        <span className="text-gray-400 text-xs ml-1">· {r.roleCategory}</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Job Description */}
           <div className="space-y-1.5">

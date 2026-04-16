@@ -32,6 +32,7 @@ import {
   ArrowRight,
   Wand2,
   Wrench,
+  Send,
 } from "lucide-react";
 import Link from "next/link";
 import { EnhanceResume } from "@/components/ai-studio/enhance-resume";
@@ -552,13 +553,30 @@ export default function AIStudioPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {savedAppId ? (
-                  <Link href={`/applications/${savedAppId}`}>
-                    <Button variant="outline" size="sm">
-                      <Briefcase className="w-3.5 h-3.5 mr-1.5" />
-                      View Application
-                      <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                  <div className="flex items-center gap-2">
+                    <Link href={`/applications/${savedAppId}`}>
+                      <Button variant="outline" size="sm">
+                        <Briefcase className="w-3.5 h-3.5 mr-1.5" />
+                        View Application
+                        <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
+                      </Button>
+                    </Link>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={async () => {
+                        await fetch(`/api/applications/${savedAppId}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ status: "applied" }),
+                        });
+                        setToast({ message: "Marked as Applied", variant: "success" });
+                      }}
+                    >
+                      <Send className="w-3.5 h-3.5 mr-1.5" />
+                      Mark Applied
                     </Button>
-                  </Link>
+                  </div>
                 ) : (
                   <Button
                     variant="outline"

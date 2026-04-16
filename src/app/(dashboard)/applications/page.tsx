@@ -25,6 +25,11 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("kanban");
+  const [resumes, setResumes] = useState<{ id: string; name: string; roleCategory: string | null }[]>([]);
+
+  useEffect(() => {
+    fetch("/api/resumes").then(r => r.json()).then(d => { if (Array.isArray(d)) setResumes(d); }).catch(() => {});
+  }, []);
 
   const fetchApplications = useCallback(async () => {
     try {
@@ -219,6 +224,7 @@ export default function ApplicationsPage() {
         open={formOpen}
         onOpenChange={setFormOpen}
         onSubmit={handleCreate}
+        resumes={resumes}
       />
     </>
   );

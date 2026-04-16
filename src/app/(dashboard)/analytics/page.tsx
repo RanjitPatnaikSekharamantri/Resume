@@ -31,6 +31,10 @@ import {
   XCircle,
   ArrowRight,
   Plus,
+  Flame,
+  Trophy,
+  CheckCircle2,
+  Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +74,12 @@ interface AnalyticsData {
   offerRate: number;
   responseRate: number;
   topCompanies: { company: string; count: number }[];
+  gamification: {
+    streak: number;
+    thisWeekApps: number;
+    weeklyGoal: number;
+    milestones: { label: string; target: number; reached: boolean }[];
+  };
 }
 
 // ── custom tooltip ──
@@ -459,6 +469,74 @@ export default function AnalyticsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── Gamification ── */}
+      {data.gamification && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Streak + Weekly Goal */}
+          <Card>
+            <CardContent className="p-5">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 rounded-xl bg-orange-50 text-orange-600">
+                  <Flame className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-gray-900 tabular-nums">{data.gamification.streak}</p>
+                  <p className="text-xs text-gray-500">Day streak</p>
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-gray-500">Weekly goal</span>
+                  <span className="text-xs font-semibold text-gray-900 tabular-nums">
+                    {data.gamification.thisWeekApps}/{data.gamification.weeklyGoal}
+                  </span>
+                </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-700"
+                    style={{ width: `${Math.min((data.gamification.thisWeekApps / data.gamification.weeklyGoal) * 100, 100)}%` }}
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Milestones */}
+          <Card className="lg:col-span-2">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <Trophy className="w-4 h-4 text-amber-500" />
+                Milestones
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {data.gamification.milestones.map((m) => (
+                  <div
+                    key={m.label}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors",
+                      m.reached
+                        ? "border-emerald-200 bg-emerald-50/50 text-emerald-700"
+                        : "border-gray-200 text-gray-400"
+                    )}
+                  >
+                    {m.reached ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <Circle className="w-4 h-4 shrink-0" />
+                    )}
+                    <span className={cn("text-xs font-medium", m.reached ? "text-emerald-700" : "text-gray-500")}>
+                      {m.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </>
   );
 }

@@ -30,6 +30,8 @@ import {
   Copy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MatchScoreCard } from "@/components/applications/match-score-card";
+import type { ScoreBreakdown } from "@/lib/match-scoring";
 
 // ── types ──
 
@@ -88,6 +90,8 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
   const [result, setResult] = useState<EnhanceResult | null>(null);
   const [previewMode, setPreviewMode] = useState<"enhanced" | "original">("enhanced");
   const [downloading, setDownloading] = useState(false);
+  const [beforeScore, setBeforeScore] = useState<ScoreBreakdown | null>(null);
+  const [afterScore, setAfterScore] = useState<ScoreBreakdown | null>(null);
 
   const canEnhance =
     selectedResume && role.trim() && company.trim() && jobDescription.trim();
@@ -135,6 +139,25 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
       const data: EnhanceResult = await res.json();
       setResult(data);
       setPreviewMode("enhanced");
+
+      // Calculate before/after match scores
+      try {
+        const [bRes, aRes] = await Promise.all([
+          fetch("/api/ai/match-score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jobDescription: jobDescription.trim(), resumeText: data.original.text, jobTitle: role.trim(), company: company.trim() }),
+          }),
+          fetch("/api/ai/match-score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jobDescription: jobDescription.trim(), resumeText: data.enhanced.text, jobTitle: role.trim(), company: company.trim() }),
+          }),
+        ]);
+        if (bRes.ok) setBeforeScore(await bRes.json());
+        if (aRes.ok) setAfterScore(await aRes.json());
+      } catch { /* non-critical */ }
+
       onToast({ message: "Resume enhanced successfully", variant: "success" });
     } catch {
       setError("Something went wrong. Please try again.");
@@ -145,7 +168,7 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
 
   // ── download handler ──
 
-  const handleDownload = async () => {
+  const handleDownload = async (format: "docx" | "pdf" = "docx") => {
     if (!result) return;
     setDownloading(true);
 
@@ -156,6 +179,7 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
         body: JSON.stringify({
           sections: result.enhanced.sections,
           fileName: result.fileName,
+          format,
         }),
       });
 
@@ -169,14 +193,14 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download =
-        result.fileName.replace(/\.docx$/i, "") + "_enhanced.docx";
+      const baseName = result.fileName.replace(/\.(docx|pdf)$/i, "");
+      a.download = `${baseName}_enhanced.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      onToast({ message: "DOCX downloaded", variant: "success" });
+      onToast({ message: `${format.toUpperCase()} downloaded`, variant: "success" });
     } catch {
       onToast({ message: "Download failed", variant: "error" });
     } finally {
@@ -408,10 +432,20 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                   Copy
                 </Button>
                 <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => handleDownload("pdf")}
+                  disabled={downloading}
+                >
+                  <Download className="w-3.5 h-3.5 mr-1.5" />
+                  PDF
+                </Button>
+                <Button
                   variant="primary"
                   size="sm"
                   className="h-8"
-                  onClick={handleDownload}
+                  onClick={() => handleDownload("docx")}
                   disabled={downloading}
                 >
                   {downloading ? (
@@ -419,10 +453,38 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                   ) : (
                     <Download className="w-3.5 h-3.5 mr-1.5" />
                   )}
-                  Download DOCX
+                  DOCX
                 </Button>
               </div>
             </div>
+
+            {/* Score comparison */}
+            {(beforeScore || afterScore) && (
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Match Score</p>
+                    {afterScore && beforeScore && afterScore.overallScore > beforeScore.overallScore && (
+                      <Badge variant="success" className="text-[10px]">+{afterScore.overallScore - beforeScore.overallScore}% improvement</Badge>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    {beforeScore && (
+                      <div className="rounded-lg border border-gray-200 p-3">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">Before</p>
+                        <MatchScoreCard overallScore={beforeScore.overallScore} skillsMatch={beforeScore.skillsMatch} experienceMatch={beforeScore.experienceMatch} keywordCoverage={beforeScore.keywordCoverage} domainMatch={beforeScore.domainMatch} compact />
+                      </div>
+                    )}
+                    {afterScore && (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-3">
+                        <p className="text-[10px] text-blue-600 uppercase tracking-wider mb-2">After</p>
+                        <MatchScoreCard overallScore={afterScore.overallScore} skillsMatch={afterScore.skillsMatch} experienceMatch={afterScore.experienceMatch} keywordCoverage={afterScore.keywordCoverage} domainMatch={afterScore.domainMatch} compact />
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Sections preview */}
             <Card>

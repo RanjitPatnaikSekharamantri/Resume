@@ -122,6 +122,53 @@ export async function GET() {
       .filter((s) => (statusCounts[s] || 0) > 0)
       .map((s) => ({ name: s, value: statusCounts[s] || 0 }));
 
+    // ── gamification: streaks & milestones ──
+    const sortedByDate = [...applications].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    // Daily application streak (consecutive days with at least 1 app)
+    let streak = 0;
+    if (sortedByDate.length > 0) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const dayMs = 24 * 60 * 60 * 1000;
+      const appDays = new Set(
+        sortedByDate.map((a) => {
+          const d = new Date(a.createdAt);
+          d.setHours(0, 0, 0, 0);
+          return d.getTime();
+        })
+      );
+      let checkDay = today.getTime();
+      // Allow today or yesterday as start
+      if (!appDays.has(checkDay)) checkDay -= dayMs;
+      while (appDays.has(checkDay)) {
+        streak++;
+        checkDay -= dayMs;
+      }
+    }
+
+    // Weekly apps this week
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    const thisWeekApps = applications.filter(
+      (a) => new Date(a.createdAt) >= startOfWeek
+    ).length;
+
+    // Milestones
+    const milestones = [
+      { label: "First Application", target: 1, reached: total >= 1 },
+      { label: "10 Applications", target: 10, reached: total >= 10 },
+      { label: "25 Applications", target: 25, reached: total >= 25 },
+      { label: "50 Applications", target: 50, reached: total >= 50 },
+      { label: "First Interview", target: 1, reached: interviewPlus >= 1 },
+      { label: "First Offer", target: 1, reached: offers >= 1 },
+    ];
+
+    const weeklyGoal = 5;
+
     return NextResponse.json({
       statusDistribution,
       weeklyActivity: dedupedWeekly.map(({ name, applications: count }) => ({
@@ -150,6 +197,12 @@ export async function GET() {
       offerRate: interviewToOffer,
       responseRate,
       topCompanies,
+      gamification: {
+        streak,
+        thisWeekApps,
+        weeklyGoal,
+        milestones,
+      },
     });
   } catch (err) {
     console.error("Get analytics error:", err);

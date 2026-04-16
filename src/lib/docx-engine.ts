@@ -6,7 +6,6 @@ import {
   TextRun,
   HeadingLevel,
   AlignmentType,
-  BorderStyle,
 } from "docx";
 
 // ── Section types that the engine recognises ──
@@ -261,14 +260,7 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
             }),
           ],
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 240, after: 120 },
-          border: {
-            bottom: {
-              style: BorderStyle.SINGLE,
-              size: 1,
-              color: "999999",
-            },
-          },
+          spacing: { before: 240, after: 80 },
         })
       );
     }
