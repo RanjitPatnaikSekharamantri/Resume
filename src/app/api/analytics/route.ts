@@ -130,25 +130,19 @@ export async function GET() {
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
-    // Daily application streak (consecutive days with at least 1 app)
+    // Daily application streak using UTC dates for consistency
     let streak = 0;
     if (sortedByDate.length > 0) {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
       const dayMs = 24 * 60 * 60 * 1000;
+      const todayUtc = Math.floor(Date.now() / dayMs);
       const appDays = new Set(
-        sortedByDate.map((a) => {
-          const d = new Date(a.createdAt);
-          d.setHours(0, 0, 0, 0);
-          return d.getTime();
-        })
+        sortedByDate.map((a) => Math.floor(new Date(a.createdAt).getTime() / dayMs))
       );
-      let checkDay = today.getTime();
-      // Allow today or yesterday as start
-      if (!appDays.has(checkDay)) checkDay -= dayMs;
+      let checkDay = todayUtc;
+      if (!appDays.has(checkDay)) checkDay--;
       while (appDays.has(checkDay)) {
         streak++;
-        checkDay -= dayMs;
+        checkDay--;
       }
     }
 

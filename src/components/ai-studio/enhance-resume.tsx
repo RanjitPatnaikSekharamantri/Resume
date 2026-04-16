@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   Download,
   Eye,
+  Save,
   ArrowRight,
   ShieldCheck,
   Pencil,
@@ -91,6 +92,10 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
   const [noNewSkills, setNoNewSkills] = useState(false);
   const [preserveLength, setPreserveLength] = useState(false);
   const [rewriteIntensity, setRewriteIntensity] = useState<"light" | "moderate" | "aggressive">("moderate");
+
+  // Save to application
+  const [savingToApp, setSavingToApp] = useState(false);
+  const [savedToApp, setSavedToApp] = useState(false);
 
   const [enhancing, setEnhancing] = useState(false);
   const [error, setError] = useState("");
@@ -221,6 +226,43 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
     const text = previewMode === "enhanced" ? result.enhanced.text : result.original.text;
     navigator.clipboard.writeText(text);
     onToast({ message: "Copied to clipboard", variant: "success" });
+  };
+
+  const handleSaveToApplication = async () => {
+    if (!result) return;
+    setSavingToApp(true);
+    try {
+      const appRes = await fetch("/api/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobTitle: role.trim(),
+          company: company.trim(),
+          jobDescription: jobDescription.trim(),
+          status: "not_applied",
+        }),
+      });
+      if (!appRes.ok) { onToast({ message: "Failed to create application", variant: "error" }); return; }
+      const app = await appRes.json();
+
+      await fetch("/api/resume-versions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationId: app.id,
+          baseResumeId: selectedResume || undefined,
+          content: result.enhanced.text,
+          isTailored: true,
+        }),
+      });
+
+      setSavedToApp(true);
+      onToast({ message: "Saved as application with enhanced resume", variant: "success" });
+    } catch {
+      onToast({ message: "Save failed", variant: "error" });
+    } finally {
+      setSavingToApp(false);
+    }
   };
 
   return (
@@ -503,6 +545,24 @@ export function EnhanceResume({ resumes, resumesLoading, onToast }: EnhanceResum
                   )}
                   DOCX
                 </Button>
+                {!savedToApp ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="h-8"
+                    onClick={handleSaveToApplication}
+                    disabled={savingToApp}
+                  >
+                    {savingToApp ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Save className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Save to App
+                  </Button>
+                ) : (
+                  <Badge variant="success" className="text-xs h-8 px-3 flex items-center">Saved</Badge>
+                )}
               </div>
             </div>
 

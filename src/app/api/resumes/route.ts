@@ -93,18 +93,17 @@ export async function POST(req: Request) {
       );
     }
 
-    let fileUrl: string;
     let storagePath: string;
 
     try {
       const result = await uploadResume(userId!, file.name, buffer, contentType);
-      fileUrl = result.url;
       storagePath = result.path;
     } catch (uploadErr) {
       console.error("Supabase upload failed:", uploadErr);
-      // Fallback: store a placeholder URL so the DB record is still useful
-      storagePath = `${userId}/${Date.now()}-${file.name}`;
-      fileUrl = storagePath;
+      return NextResponse.json(
+        { error: "File upload failed. Please check your Supabase configuration and try again." },
+        { status: 502 }
+      );
     }
 
     const resume = await prisma.baseResume.create({

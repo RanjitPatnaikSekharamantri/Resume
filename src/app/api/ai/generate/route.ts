@@ -17,6 +17,12 @@ export async function POST(req: Request) {
       );
     }
 
+    // Check for active AI provider (used when external API integration is available)
+    const activeProvider = await prisma.aIProvider.findFirst({
+      where: { userId: userId!, isActive: true },
+      select: { id: true, name: true, model: true },
+    });
+
     if (jobDescription.length > 15000) {
       return NextResponse.json(
         { error: "Job description is too long (max 15,000 characters)" },
@@ -73,6 +79,7 @@ export async function POST(req: Request) {
       resume: generateTailoredResume(ctx),
       coverLetter: generateCoverLetter(ctx),
       type: "both",
+      provider: activeProvider ? { name: activeProvider.name, model: activeProvider.model } : null,
     });
   } catch (err) {
     console.error("AI generate error:", err);

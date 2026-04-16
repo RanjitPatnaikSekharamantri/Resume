@@ -35,6 +35,7 @@ import {
   X,
   Check,
   GitCompare,
+  Download,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -286,6 +287,27 @@ export function CoverLetterSection({
     onToast("Copied to clipboard", "success");
   };
 
+  const downloadCoverLetter = async (content: string, fileName: string, format: "pdf" | "docx") => {
+    try {
+      const res = await fetch("/api/cover-letters/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, fileName, format }),
+      });
+      if (!res.ok) { onToast("Download failed", "error"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${fileName}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      onToast(`${format.toUpperCase()} downloaded`, "success");
+    } catch { onToast("Download failed", "error"); }
+  };
+
   return (
     <>
       <Card>
@@ -479,9 +501,37 @@ export function CoverLetterSection({
                             </div>
                           </div>
                         ) : (
-                          <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                            {cl.content}
-                          </p>
+                          <div className="space-y-3">
+                            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                              {cl.content}
+                            </p>
+                            <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await downloadCoverLetter(cl.content, `${jobTitle}_${company}_CoverLetter_v${cl.version}`, "pdf");
+                                }}
+                              >
+                                <Download className="w-3 h-3 mr-1" />
+                                PDF
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  await downloadCoverLetter(cl.content, `${jobTitle}_${company}_CoverLetter_v${cl.version}`, "docx");
+                                }}
+                              >
+                                <Download className="w-3 h-3 mr-1" />
+                                DOCX
+                              </Button>
+                            </div>
+                          </div>
                         )}
                       </div>
                     )}
