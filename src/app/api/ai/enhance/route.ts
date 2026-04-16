@@ -6,6 +6,7 @@ import {
   parseDocx,
   enhanceSections,
   sectionsToText,
+  extractJdKeywords,
   type SectionKind,
   type ResumeSection,
 } from "@/lib/docx-engine";
@@ -113,6 +114,9 @@ export async function POST(req: Request) {
       select: { name: true, model: true },
     });
 
+    // JD-derived keywords bolded inline at render time (DOCX/PDF).
+    const emphasizeTokens = extractJdKeywords(jobDescription);
+
     return NextResponse.json({
       original: {
         sections: parsed.sections.map(sectionToJson),
@@ -124,6 +128,7 @@ export async function POST(req: Request) {
       },
       resumeName: resume.name,
       fileName: resume.fileName,
+      emphasizeTokens,
       engine: {
         kind: "deterministic",
         label: "Built-in enhancement engine",

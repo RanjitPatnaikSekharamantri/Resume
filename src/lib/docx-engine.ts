@@ -9,6 +9,18 @@ import {
 } from "docx";
 
 // ── Section types that the engine recognises ──
+//
+// The app enforces a strict canonical resume structure to match the
+// reference base-resume pattern:
+//
+//   • PROFILE SUMMARY    (paragraph, no bullets, no bold)
+//   • TECHNICAL SKILLS   (bullets: "· Category: tool1, tool2, tool3")
+//   • EDUCATION          (verbatim, preserved)
+//   • WORK EXPERIENCE    (bold role/company/location/date header, bulleted body with inline bold on key tools)
+//   • CERTIFICATIONS     (verbatim, preserved)
+//
+// Any other headings from an uploaded base resume are normalised to these
+// canonical kinds at parse time.
 
 export type SectionKind =
   | "header"
@@ -37,6 +49,8 @@ export interface EnhanceRules {
   preserveLength?: boolean;
   rewriteIntensity?: "light" | "moderate" | "aggressive";
   focusDomain?: string;
+  prioritizeRecent?: boolean;
+  strongSummaryRewrite?: boolean;
 }
 
 export interface EnhanceOptions {
@@ -47,10 +61,26 @@ export interface EnhanceOptions {
   rules?: EnhanceRules;
 }
 
+/**
+ * The canonical display title for every section kind. Used when rendering
+ * DOCX / PDF / preview text so the output always matches the required
+ * uppercase pattern regardless of the heading casing in the source file.
+ */
+export const CANONICAL_SECTION_TITLES: Record<SectionKind, string> = {
+  header: "",
+  summary: "PROFILE SUMMARY",
+  skills: "TECHNICAL SKILLS",
+  experience: "WORK EXPERIENCE",
+  projects: "PROJECTS",
+  education: "EDUCATION",
+  certifications: "CERTIFICATIONS",
+  other: "",
+};
+
 const SECTION_HEADING_PATTERNS: [RegExp, SectionKind][] = [
-  [/^(professional\s+)?summary|objective|profile/i, "summary"],
-  [/^(core\s+)?(skills|competencies|technical\s+skills|technologies)/i, "skills"],
-  [/^(professional\s+)?experience|work\s+(history|experience)|employment/i, "experience"],
+  [/^(professional\s+)?(summary|profile\s+summary|profile|objective|about)/i, "summary"],
+  [/^(core\s+)?(skills|competencies|technical\s+skills|technologies|tech\s+stack|tools)/i, "skills"],
+  [/^(professional\s+)?(experience|work\s+experience)|work\s+(history)|employment/i, "experience"],
   [/^projects?|personal\s+projects?|key\s+projects?|selected\s+projects?/i, "projects"],
   [/^education|academic/i, "education"],
   [/^certifications?|licenses?|credentials|awards?|honors?|publications?/i, "certifications"],
@@ -124,10 +154,30 @@ function isModifiable(kind: SectionKind): boolean {
 
 // ── Enhance sections ──
 
+/**
+ * Normalise section titles to the canonical uppercase pattern and clear
+ * the index-level module state used by bullet enhancers. Called both at
+ * parse time and before enhancement so that output is deterministic.
+ */
+export function normalizeSectionTitles(parsed: ParsedResume): ParsedResume {
+  const sections = parsed.sections.map((s) => {
+    const canonical = CANONICAL_SECTION_TITLES[s.kind];
+    if (s.kind === "header") return s;
+    if (!canonical) return s;
+    return { ...s, title: canonical };
+  });
+  return { ...parsed, sections };
+}
+
 export function enhanceSections(
   parsed: ParsedResume,
   options: EnhanceOptions
 ): ParsedResume {
+  // Reset module-level indexes so repeated enhancements are deterministic.
+  bulletPhraseIdx = 0;
+  strongVerbIdx = 0;
+
+  const normalized = normalizeSectionTitles(parsed);
   const rules = options.rules || {};
   let keywords = extractKeywords(options.jobDescription);
 
@@ -146,7 +196,7 @@ export function enhanceSections(
   // blocks) get stronger rewriting than older ones.
   let experienceRoleIndex = 0;
 
-  const enhanced = parsed.sections.map((section) => {
+  const enhanced = normalized.sections.map((section) => {
     if (!section.modifiable || !enabledSet.has(section.kind)) {
       return section;
     }
@@ -155,7 +205,7 @@ export function enhanceSections(
       case "summary":
         return rules.preserveLength
           ? preserveLengthEnhance(section, keywords, options)
-          : enhanceSummary(section, keywords, options, intensity);
+          : enhanceSummary(section, keywords, options, intensity, !!rules.strongSummaryRewrite);
       case "skills":
         return rules.noNewSkills ? section : enhanceSkills(section, keywords, intensity);
       case "experience": {
@@ -165,19 +215,20 @@ export function enhanceSections(
           options,
           maxBullets,
           intensity,
-          experienceRoleIndex
+          experienceRoleIndex,
+          rules.prioritizeRecent !== false
         );
         experienceRoleIndex += 1;
         return result;
       }
       case "projects":
-        return enhanceExperience(section, keywords, options, maxBullets, intensity, 99);
+        return enhanceExperience(section, keywords, options, maxBullets, intensity, 99, false);
       default:
         return section;
     }
   });
 
-  return { sections: enhanced, rawText: parsed.rawText };
+  return { sections: enhanced, rawText: normalized.rawText };
 }
 
 function preserveLengthEnhance(
@@ -186,10 +237,10 @@ function preserveLengthEnhance(
   options: EnhanceOptions
 ): ResumeSection {
   const original = section.lines.join(" ").trim();
-  if (!original) return enhanceSummary(section, keywords, options, "moderate");
+  if (!original) return enhanceSummary(section, keywords, options, "moderate", false);
 
   const targetLen = original.length;
-  const enhanced = enhanceSummary(section, keywords, options, "light");
+  const enhanced = enhanceSummary(section, keywords, options, "light", false);
   const enhancedText = enhanced.lines.join(" ").trim();
 
   if (enhancedText.length > targetLen * 1.15) {
@@ -198,13 +249,27 @@ function preserveLengthEnhance(
   return enhanced;
 }
 
+/**
+ * Summary rewriting.
+ *
+ * Rules (enforced regardless of intensity):
+ *   • output is a single paragraph (one joined line)
+ *   • no bullet prefix — the DOCX/PDF renderers refuse to add bullets to
+ *     the summary section anyway
+ *   • no bold markup in the text itself — emphasis happens at render time
+ */
 function enhanceSummary(
   section: ResumeSection,
   keywords: string[],
   options: EnhanceOptions,
-  intensity: "light" | "moderate" | "aggressive"
+  intensity: "light" | "moderate" | "aggressive",
+  strongRewrite: boolean
 ): ResumeSection {
-  const original = section.lines.join(" ").trim();
+  const original = section.lines
+    .map((l) => l.replace(/^[•\-–—\*·]\s*/, "").trim()) // strip any accidental bullets
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
   const topKeywords = keywords.slice(0, 8);
 
   if (!original) {
@@ -230,7 +295,7 @@ function enhanceSummary(
     (k) => !lowerOriginal.includes(k.toLowerCase())
   );
 
-  if (intensity === "light") {
+  if (intensity === "light" && !strongRewrite) {
     if (missingKeywords.length === 0) return { ...section, lines: [original] };
     const enhanced =
       original.replace(/\.?\s*$/, "") +
@@ -238,20 +303,20 @@ function enhanceSummary(
     return { ...section, lines: [enhanced] };
   }
 
-  // Moderate / aggressive: open with a strong value proposition tailored to
-  // the target role and company, then weave in the most relevant missing
-  // keywords. Keep the original factual content at the end so truth is
-  // preserved.
-  const lead =
-    intensity === "aggressive"
-      ? `Accomplished ${options.role} specializing in ${topKeywords
-          .slice(0, 3)
-          .join(", ")
-          .toLowerCase()}, with a proven record of driving measurable outcomes for ${options.company}-style organizations.`
-      : `${options.role} with deep expertise in ${topKeywords
-          .slice(0, 3)
-          .join(", ")
-          .toLowerCase()}.`;
+  // Moderate / aggressive / strongRewrite: open with a strong value
+  // proposition tailored to the target role and company, weave in the most
+  // relevant missing keywords, then keep the original factual content at
+  // the end so truth is preserved.
+  const useAggressiveLead = intensity === "aggressive" || strongRewrite;
+  const lead = useAggressiveLead
+    ? `Accomplished ${options.role} specializing in ${topKeywords
+        .slice(0, 3)
+        .join(", ")
+        .toLowerCase()}, with a proven record of driving measurable outcomes at ${options.company}-class organizations.`
+    : `${options.role} with deep expertise in ${topKeywords
+        .slice(0, 3)
+        .join(", ")
+        .toLowerCase()}.`;
 
   const bridge = missingKeywords.length
     ? ` Brings demonstrated strength in ${missingKeywords
@@ -265,16 +330,32 @@ function enhanceSummary(
   return { ...section, lines: [(lead + bridge + " " + trailer).trim()] };
 }
 
+/**
+ * Skills section enhancement.
+ *
+ * The canonical format is:
+ *   "· Category: tool1, tool2, tool3"
+ *
+ * If the existing resume already uses this structured "Category: items"
+ * shape, we append new relevant keywords to the BEST-MATCHING category
+ * rather than creating a grab-bag of new bullets. This keeps the visual
+ * consistency of the base resume. If the resume uses flat bullets, we add
+ * new bullets using the same canonical "· " prefix and put them under a
+ * generic "Tools" category when we can infer one.
+ */
 function enhanceSkills(
   section: ResumeSection,
   keywords: string[],
   intensity: "light" | "moderate" | "aggressive"
 ): ResumeSection {
+  const max = intensity === "aggressive" ? 10 : intensity === "moderate" ? 6 : 3;
+
+  // Detect existing tokens (flattened, lowercased).
   const existing = new Set(
     section.lines
       .join(" ")
       .split(/[,•·|;\n]/)
-      .map((s) => s.trim().toLowerCase())
+      .map((s) => s.replace(/^[^:]*:\s*/, "").trim().toLowerCase()) // strip category prefix
       .filter(Boolean)
   );
 
@@ -285,13 +366,52 @@ function enhanceSkills(
         (e) => e.includes(lower) || lower.includes(e)
       );
     })
-    .slice(0, intensity === "aggressive" ? 10 : intensity === "moderate" ? 6 : 3);
+    .slice(0, max);
 
   if (newSkills.length === 0) return section;
 
+  // Does the existing section use the "Category: items" pattern?
+  const categoryLineRe = /^([•\-–—\*·]\s*)?([^:]{2,40}):\s*(.+)$/;
+  const categorized = section.lines
+    .map((l, i) => ({ i, l: l.trim(), m: l.trim().match(categoryLineRe) }))
+    .filter((x) => x.m);
+
+  if (categorized.length >= 1) {
+    // Distribute new skills across existing categories by best keyword
+    // match. Each skill lands under the category whose items share the
+    // most characters with it (very rough but stable heuristic). If no
+    // category matches, we tack them onto the last category line.
+    const updated = [...section.lines];
+    for (const skill of newSkills) {
+      const skillLower = skill.toLowerCase();
+      let best = categorized[categorized.length - 1];
+      let bestScore = -1;
+      for (const c of categorized) {
+        const items = c.m![3].toLowerCase();
+        const score = items
+          .split(/[,;]/)
+          .reduce((acc, token) => acc + (token.trim() && skillLower.includes(token.trim().slice(0, 3)) ? 1 : 0), 0);
+        if (score > bestScore) {
+          bestScore = score;
+          best = c;
+        }
+      }
+      const parts = best.m!;
+      const bulletPrefix = parts[1] || "· ";
+      const categoryLabel = parts[2];
+      const items = parts[3];
+      updated[best.i] = `${bulletPrefix}${categoryLabel}: ${items}, ${skill}`;
+      // Keep categorized cache in sync for subsequent iterations.
+      best.m = updated[best.i].match(categoryLineRe);
+    }
+    return { ...section, lines: updated };
+  }
+
+  // Flat bullet list — preserve style by adding new bullets using "· "
+  // prefix (the canonical bullet character for this template).
   return {
     ...section,
-    lines: [...section.lines, ...newSkills.map((s) => `• ${s}`)],
+    lines: [...section.lines, ...newSkills.map((s) => `· ${s}`)],
   };
 }
 
@@ -301,18 +421,26 @@ function enhanceExperience(
   options: EnhanceOptions,
   maxEnhancedBullets: number,
   intensity: "light" | "moderate" | "aggressive",
-  roleIndex: number
+  roleIndex: number,
+  prioritizeRecent: boolean
 ): ResumeSection {
   const enhanced: string[] = [];
   let bulletCount = 0;
 
-  // Only the first two roles in a candidate's experience are rewritten with
-  // the highest intensity. Older roles receive a much lighter touch.
-  const effectiveIntensity: typeof intensity =
-    roleIndex < 2 ? intensity : intensity === "aggressive" ? "moderate" : "light";
+  // When "prioritize recent" is on, only the first two roles in a
+  // candidate's experience receive the full rewrite intensity; older
+  // roles get a much lighter touch. When it's off (user explicitly
+  // disabled it), every role is rewritten at the requested intensity.
+  const effectiveIntensity: typeof intensity = prioritizeRecent
+    ? roleIndex < 2
+      ? intensity
+      : intensity === "aggressive"
+        ? "moderate"
+        : "light"
+    : intensity;
 
   for (const line of section.lines) {
-    if (/^[•\-–—\*]/.test(line.trim()) && bulletCount < maxEnhancedBullets) {
+    if (/^[•\-–—\*·]/.test(line.trim()) && bulletCount < maxEnhancedBullets) {
       const enhancedBullet = enhanceBullet(line, keywords, options, effectiveIntensity);
       enhanced.push(enhancedBullet);
       bulletCount++;
@@ -351,14 +479,18 @@ function enhanceBullet(
   intensity: "light" | "moderate" | "aggressive"
 ): string {
   let text = bullet.trim();
-  const bulletPrefix = /^[•\-–—\*]\s*/.exec(text)?.[0] || "• ";
-  text = text.replace(/^[•\-–—\*]\s*/, "");
+  // Preserve the source's bullet character (· matches the canonical base
+  // resume pattern; normalise anything else to ·).
+  const bulletMatch = /^([•\-–—\*·])\s*/.exec(text);
+  const sourceBullet = bulletMatch?.[1] || "·";
+  const bulletPrefix = `${sourceBullet === "·" ? "·" : sourceBullet} `;
+  text = text.replace(/^[•\-–—\*·]\s*/, "");
 
   // Replace weak openings with strong action verbs (moderate / aggressive only).
   if (intensity !== "light" && WEAK_OPENING_RE.test(text)) {
     const verb = STRONG_VERBS[strongVerbIdx % STRONG_VERBS.length];
     strongVerbIdx++;
-    text = text.replace(WEAK_OPENING_RE, verb).replace(/^([A-Z])/, (m) => m);
+    text = text.replace(WEAK_OPENING_RE, verb);
   }
 
   const lowerText = text.toLowerCase();
@@ -379,50 +511,72 @@ function enhanceBullet(
 // ── Build DOCX from sections ──
 
 /**
- * Heuristic: detect a line that likely contains a role header in an
- * experience / projects section. These are the lines worth bolding
- * ("Senior Engineer · Google · SF · 2021 – Present").
+ * Heuristic: detect a line that is the role/company/location/date header
+ * in an experience / projects section. These lines are bolded in full
+ * (e.g. "Senior Engineer | Google | SF | Jan 2021 – Present").
+ *
+ * Accepts " | ", " · ", " — " or " - " as separators to match common
+ * formatting conventions.
  */
 const ROLE_HEADER_HINTS = [
   /\bpresent\b/i,
-  /\b(19|20)\d{2}\s*[–—\-]\s*((19|20)\d{2}|present)/i, // year range
+  /\b(19|20)\d{2}\s*[–—\-]\s*((19|20)\d{2}|present)/i,
   /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(19|20)\d{2}/i,
-  /\s[·|•–—]\s/, // clear separator between role / company / location / date
+  /\s[·|•–—]\s/,
+  /\s\|\s/,
 ];
 
 function isRoleHeaderLine(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
-  if (/^[•\-–—\*]/.test(trimmed)) return false; // bullets aren't headers
-  if (trimmed.length > 160) return false;
+  if (/^[•\-–—\*·]/.test(trimmed)) return false;
+  if (trimmed.length > 200) return false;
   return ROLE_HEADER_HINTS.some((re) => re.test(trimmed));
 }
 
 /**
- * Technical tokens & proper-noun-ish phrases worth bolding inline (ATS-safe).
- * Kept conservative to avoid over-bolding.
+ * Fixed list of technical tokens that are always worth bolding inline
+ * (ATS-safe, proper-noun-ish, widely recognised). We keep this conservative
+ * to avoid over-bolding. The enhancer also passes JD-extracted keywords
+ * which are merged in at render time so resume-specific tools get bolded.
  */
-const EMPHASIZE_TOKENS = [
+const BASE_EMPHASIZE_TOKENS = [
   "TypeScript", "JavaScript", "Python", "Go", "Golang", "Rust", "Java", "Kotlin",
   "React", "Next.js", "Node.js", "GraphQL", "REST",
   "AWS", "GCP", "Azure", "Kubernetes", "Docker", "Terraform",
   "PostgreSQL", "MySQL", "Redis", "Kafka",
   "CI/CD", "SRE",
+  "Splunk", "Nessus", "CrowdStrike", "SentinelOne", "Wireshark", "Burp Suite",
+  "SIEM", "SOAR", "EDR", "MITRE",
+  "Tableau", "Power BI", "Snowflake", "Databricks", "Airflow",
 ];
 
-function buildEmphasizedRuns(text: string): TextRun[] {
-  if (!text) return [new TextRun({ text: "", size: 21, font: "Calibri" })];
+function escapeRegex(s: string) {
+  return s.replace(/[.+*?^${}()|[\]\\]/g, "\\$&");
+}
 
-  // Build a single regex that matches any emphasize token as a whole word.
-  const pattern = EMPHASIZE_TOKENS.map((t) =>
-    t.replace(/[.+*?^${}()|[\]\\]/g, "\\$&")
-  ).join("|");
-  const re = new RegExp(`\\b(${pattern})\\b`, "g");
+function buildEmphasizeRegex(extraTokens: string[]): RegExp {
+  const merged = new Set<string>();
+  for (const t of BASE_EMPHASIZE_TOKENS) merged.add(t);
+  for (const t of extraTokens) {
+    // Only promote single words or very short tool-like phrases (≤ 24 chars
+    // total) so we don't end up bolding entire sentences derived from the
+    // JD's bigrams.
+    if (t.length <= 24 && /^[A-Za-z][A-Za-z0-9./+#\- ]*$/.test(t)) merged.add(t);
+  }
+  const pattern = [...merged].map(escapeRegex).join("|");
+  return new RegExp(`\\b(${pattern})\\b`, "g");
+}
+
+function buildEmphasizedRuns(text: string, emphasizeRe: RegExp): TextRun[] {
+  if (!text) return [new TextRun({ text: "", size: 21, font: "Calibri" })];
 
   const runs: TextRun[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(text)) !== null) {
+  // RegExp with /g state must be reset each call.
+  emphasizeRe.lastIndex = 0;
+  while ((match = emphasizeRe.exec(text)) !== null) {
     if (match.index > lastIdx) {
       runs.push(
         new TextRun({
@@ -454,10 +608,27 @@ function buildEmphasizedRuns(text: string): TextRun[] {
   return runs.length ? runs : [new TextRun({ text, size: 21, font: "Calibri" })];
 }
 
-export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
-  const children: Paragraph[] = [];
+export interface BuildDocxOptions {
+  /**
+   * Extra tokens (usually JD-derived keywords) that should be bolded inline
+   * in addition to the built-in technical tokens.
+   */
+  emphasizeTokens?: string[];
+}
 
-  for (const section of parsed.sections) {
+export async function buildDocx(
+  parsed: ParsedResume,
+  opts: BuildDocxOptions = {}
+): Promise<Buffer> {
+  const children: Paragraph[] = [];
+  const emphasizeRe = buildEmphasizeRegex(opts.emphasizeTokens || []);
+
+  // Work in a title-normalised copy so headings in the document always use
+  // the canonical uppercase names even if the source file used a different
+  // casing / synonym (e.g. "Professional Experience").
+  const normalized = normalizeSectionTitles(parsed);
+
+  for (const section of normalized.sections) {
     if (section.kind !== "header" && section.title) {
       children.push(
         new Paragraph({
@@ -482,8 +653,8 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
         continue;
       }
 
-      const isBullet = /^[•\-–—\*]/.test(line);
-      const cleanLine = isBullet ? line.replace(/^[•\-–—\*]\s*/, "") : line;
+      const isBullet = /^[•\-–—\*·]/.test(line);
+      const cleanLine = isBullet ? line.replace(/^[•\-–—\*·]\s*/, "") : line;
 
       if (section.kind === "header" && lineIdx === 0) {
         children.push(
@@ -500,7 +671,9 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
             spacing: { after: 60 },
           })
         );
-      } else if (section.kind === "header") {
+        continue;
+      }
+      if (section.kind === "header") {
         children.push(
           new Paragraph({
             children: [
@@ -515,37 +688,134 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
             spacing: { after: 40 },
           })
         );
-      } else if (isBullet) {
-        children.push(
-          new Paragraph({
-            children: buildEmphasizedRuns(cleanLine),
-            bullet: { level: 0 },
-            spacing: { after: 40 },
-          })
-        );
-      } else if (
-        (section.kind === "experience" || section.kind === "projects") &&
-        isRoleHeaderLine(cleanLine)
-      ) {
-        // Role / company / location / date line — bold in full for stronger
-        // visual hierarchy in the experience section.
+        continue;
+      }
+
+      // PROFILE SUMMARY — strict paragraph, no bullets, no bold.
+      if (section.kind === "summary") {
         children.push(
           new Paragraph({
             children: [
               new TextRun({
                 text: cleanLine,
-                bold: true,
                 size: 21,
                 font: "Calibri",
               }),
             ],
-            spacing: { before: 80, after: 40 },
+            spacing: { after: 80 },
+          })
+        );
+        continue;
+      }
+
+      // TECHNICAL SKILLS — "· Category: tool1, tool2, tool3"
+      // Rule: category label is NOT bold. The items after the colon may
+      // contain tech tokens that ARE bolded via the inline-emphasis runs.
+      if (section.kind === "skills") {
+        const catMatch = cleanLine.match(/^([^:]{2,40}):\s*(.+)$/);
+        if (catMatch) {
+          const category = catMatch[1];
+          const items = catMatch[2];
+          children.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: `${category}: `,
+                  size: 21,
+                  font: "Calibri",
+                }),
+                ...buildEmphasizedRuns(items, emphasizeRe),
+              ],
+              bullet: { level: 0 },
+              spacing: { after: 40 },
+            })
+          );
+        } else {
+          children.push(
+            new Paragraph({
+              children: buildEmphasizedRuns(cleanLine, emphasizeRe),
+              bullet: { level: 0 },
+              spacing: { after: 40 },
+            })
+          );
+        }
+        continue;
+      }
+
+      // WORK EXPERIENCE — bold role/company/location/date header,
+      // selective inline bold on bullet bodies.
+      if (section.kind === "experience" || section.kind === "projects") {
+        if (!isBullet && isRoleHeaderLine(cleanLine)) {
+          children.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: cleanLine,
+                  bold: true,
+                  size: 21,
+                  font: "Calibri",
+                }),
+              ],
+              spacing: { before: 120, after: 40 },
+            })
+          );
+          continue;
+        }
+        if (isBullet) {
+          children.push(
+            new Paragraph({
+              children: buildEmphasizedRuns(cleanLine, emphasizeRe),
+              bullet: { level: 0 },
+              spacing: { after: 40 },
+            })
+          );
+          continue;
+        }
+        // Non-bullet, non-header line inside experience: treat as the
+        // single-line company description directly under the role header.
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: cleanLine,
+                italics: true,
+                size: 20,
+                font: "Calibri",
+                color: "555555",
+              }),
+            ],
+            spacing: { after: 40 },
+          })
+        );
+        continue;
+      }
+
+      // EDUCATION / CERTIFICATIONS — preserve verbatim (bulletize if prefix
+      // existed, otherwise paragraph). No inline emphasis to keep ATS clean.
+      if (isBullet) {
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({
+                text: cleanLine,
+                size: 21,
+                font: "Calibri",
+              }),
+            ],
+            bullet: { level: 0 },
+            spacing: { after: 40 },
           })
         );
       } else {
         children.push(
           new Paragraph({
-            children: buildEmphasizedRuns(cleanLine),
+            children: [
+              new TextRun({
+                text: cleanLine,
+                size: 21,
+                font: "Calibri",
+              }),
+            ],
             spacing: { after: 40 },
           })
         );
@@ -583,7 +853,9 @@ export function sectionsToText(sections: ResumeSection[]): string {
   for (const section of sections) {
     if (section.kind !== "header" && section.title) {
       lines.push("");
-      lines.push(section.title.toUpperCase());
+      const canonical = CANONICAL_SECTION_TITLES[section.kind];
+      const title = (canonical || section.title).toUpperCase();
+      lines.push(title);
       lines.push("─".repeat(40));
     }
 
@@ -596,6 +868,10 @@ export function sectionsToText(sections: ResumeSection[]): string {
 }
 
 // ── Keyword extraction (shared with generate route) ──
+
+export function extractJdKeywords(text: string): string[] {
+  return extractKeywords(text);
+}
 
 function extractKeywords(text: string): string[] {
   const stopWords = new Set([

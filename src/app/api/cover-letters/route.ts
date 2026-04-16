@@ -8,7 +8,7 @@ export async function POST(req: Request) {
     if (error) return error;
 
     const body = await req.json();
-    const { applicationId, jobTitle, company, content } = body;
+    const { applicationId, content } = body;
 
     if (!applicationId || !content) {
       return NextResponse.json(
@@ -33,11 +33,15 @@ export async function POST(req: Request) {
       orderBy: { version: "desc" },
     });
 
+    // Enforce: cover letter role/company ALWAYS come from the application.
+    // Any jobTitle/company sent by the client is ignored to prevent
+    // mismatches between the saved cover letter and the application it's
+    // attached to.
     const coverLetter = await prisma.coverLetterVersion.create({
       data: {
         applicationId,
-        jobTitle: jobTitle || app.jobTitle,
-        company: company || app.company,
+        jobTitle: app.jobTitle,
+        company: app.company,
         version: (latestVersion?.version || 0) + 1,
         content,
       },
