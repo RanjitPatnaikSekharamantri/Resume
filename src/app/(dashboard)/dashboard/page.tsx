@@ -244,29 +244,35 @@ export default function DashboardPage() {
 
         <div className="space-y-4">
           {/* Upcoming Reminders */}
-          {stats?.upcomingReminders && stats.upcomingReminders.length > 0 && (
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                {stats?.upcomingReminders && stats.upcomingReminders.length > 0 && (
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                  Follow-ups
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1.5">
-                {stats.upcomingReminders.map((r) => (
-                  <Link key={r.id} href={`/applications/${r.id}`} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50 transition-colors group">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-900 truncate group-hover:text-blue-600">{r.jobTitle}</p>
-                      <p className="text-[11px] text-gray-500">{r.company}</p>
-                    </div>
-                    <span className="text-[11px] text-amber-600 font-medium shrink-0">
-                      {new Date(r.followUpDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                    </span>
-                  </Link>
-                ))}
-              </CardContent>
-            </Card>
-          )}
+                )}
+                Follow-ups
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {stats?.upcomingReminders && stats.upcomingReminders.length > 0 ? (
+                <div className="space-y-1.5">
+                  {stats.upcomingReminders.map((r) => (
+                    <Link key={r.id} href={`/applications/${r.id}`} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50 transition-colors group">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-gray-900 truncate group-hover:text-blue-600">{r.jobTitle}</p>
+                        <p className="text-[11px] text-gray-500">{r.company}</p>
+                      </div>
+                      <span className="text-[11px] text-amber-600 font-medium shrink-0">
+                        {new Date(r.followUpDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 text-center py-3">No upcoming follow-ups. Set one from an application detail page.</p>
+              )}
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader className="pb-3">

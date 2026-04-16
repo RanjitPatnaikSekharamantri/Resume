@@ -14,6 +14,7 @@ const VALID_SECTION_KINDS = new Set<SectionKind>([
   "summary",
   "skills",
   "experience",
+  "projects",
 ]);
 
 export async function POST(req: Request) {

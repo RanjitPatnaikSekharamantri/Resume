@@ -64,20 +64,40 @@ export async function POST(req: Request) {
     } = {};
 
     if (jobDescription) {
-      const profile = await prisma.profile.findUnique({
-        where: { userId: userId! },
-        include: { user: { select: { name: true } } },
-      });
-      const resumeProxy = [
-        profile?.summary || "",
-        profile?.preferredRole || "",
-        jobTitle,
-      ].filter(Boolean).join(" ");
+      // Try to use actual resume content if baseResumeId provided
+      let resumeText = "";
 
-      if (resumeProxy.length > 10) {
+      if (body.baseResumeId) {
+        const baseResume = await prisma.baseResume.findFirst({
+          where: { id: body.baseResumeId, userId: userId! },
+        });
+        // Check for any existing resume versions with content
+        if (baseResume) {
+          const latestVersion = await prisma.resumeVersion.findFirst({
+            where: { baseResumeId: baseResume.id },
+            orderBy: { createdAt: "desc" },
+            select: { content: true },
+          });
+          resumeText = latestVersion?.content || baseResume.name + " " + (baseResume.roleCategory || "");
+        }
+      }
+
+      // Fall back to profile data
+      if (!resumeText) {
+        const profile = await prisma.profile.findUnique({
+          where: { userId: userId! },
+        });
+        resumeText = [
+          profile?.summary || "",
+          profile?.preferredRole || "",
+          jobTitle,
+        ].filter(Boolean).join(" ");
+      }
+
+      if (resumeText.length > 10) {
         const score = calculateMatchScore({
           jobDescription,
-          resumeText: resumeProxy,
+          resumeText,
           jobTitle,
           company,
         });
@@ -115,6 +135,27 @@ export async function POST(req: Request) {
         description: `Application created for ${jobTitle} at ${company}`,
       },
     });
+
+    // Link base resume as a version if provided
+    if (body.baseResumeId) {
+      const baseResume = await prisma.baseResume.findFirst({
+        where: { id: body.baseResumeId, userId: userId! },
+      });
+      if (baseResume) {
+        await prisma.resumeVersion.create({
+          data: {
+            applicationId: application.id,
+            baseResumeId: baseResume.id,
+            jobTitle,
+            company,
+            version: 1,
+            fileName: baseResume.fileName,
+            fileUrl: baseResume.fileUrl,
+            isTailored: false,
+          },
+        });
+      }
+    }
 
     return NextResponse.json(application, { status: 201 });
   } catch (err) {

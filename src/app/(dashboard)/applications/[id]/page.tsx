@@ -43,6 +43,7 @@ import {
   Globe,
   CalendarDays,
   Building2,
+  Target,
   CheckCircle2,
   AlertCircle,
   Clock,
@@ -545,7 +546,7 @@ export default function ApplicationDetailPage() {
 
         {/* Sidebar */}
         <div className="space-y-4">
-          {app.matchScore != null && (
+          {app.matchScore != null ? (
             <MatchScoreCard
               overallScore={app.matchScore}
               skillsMatch={app.skillsMatch}
@@ -553,6 +554,14 @@ export default function ApplicationDetailPage() {
               keywordCoverage={app.keywordCoverage}
               domainMatch={app.domainMatch}
             />
+          ) : (
+            <Card>
+              <CardContent className="p-5 text-center">
+                <Target className="w-5 h-5 text-gray-300 mx-auto mb-2" />
+                <p className="text-xs text-gray-500">No match score yet</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Add a job description to calculate</p>
+              </CardContent>
+            </Card>
           )}
 
           <Card>

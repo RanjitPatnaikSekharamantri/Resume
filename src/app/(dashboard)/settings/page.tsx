@@ -11,8 +11,9 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import {
-  Shield, Key, Trash2, Plus, Loader2, CheckCircle2, AlertCircle, Pencil,
+  Shield, Key, Trash2, Plus, Loader2, Pencil,
 } from "lucide-react";
+import { ToastNotification, type ToastData } from "@/components/ui/toast-notification";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -24,17 +25,6 @@ interface Provider {
   keyLastFour: string;
 }
 
-type ToastData = { message: string; variant: "success" | "error" } | null;
-
-function Toast({ data, onDismiss }: { data: NonNullable<ToastData>; onDismiss: () => void }) {
-  useEffect(() => { const t = setTimeout(onDismiss, 4000); return () => clearTimeout(t); }, [onDismiss]);
-  return (
-    <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-2.5 rounded-xl border px-4 py-3 shadow-lg animate-in slide-in-from-bottom-4 fade-in ${data.variant === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-red-200 bg-red-50 text-red-800"}`}>
-      {data.variant === "success" ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
-      <span className="text-sm font-medium">{data.message}</span>
-    </div>
-  );
-}
 
 export default function SettingsPage() {
   const { data: session } = useSession();
@@ -238,7 +228,7 @@ export default function SettingsPage() {
         </DialogContent>
       </Dialog>
 
-      {toast && <Toast data={toast} onDismiss={() => setToast(null)} />}
+      {toast && <ToastNotification data={toast} onDismiss={() => setToast(null)} />}
     </>
   );
 }
