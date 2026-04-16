@@ -14,6 +14,14 @@ import {
   Shield, Key, Trash2, Plus, Loader2, Pencil,
 } from "lucide-react";
 import { ToastNotification, type ToastData } from "@/components/ui/toast-notification";
+import {
+  Select as TzSelect,
+  SelectContent as TzSelectContent,
+  SelectItem as TzSelectItem,
+  SelectTrigger as TzSelectTrigger,
+  SelectValue as TzSelectValue,
+} from "@/components/ui/select";
+import { getUserTimezone, setUserTimezone, TIMEZONE_OPTIONS, getTimezoneLabel, detectTimezone } from "@/lib/timezone";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +36,21 @@ interface Provider {
 
 export default function SettingsPage() {
   const { data: session } = useSession();
+  const [timezone, setTimezoneState] = useState("auto");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("ai-career-os-timezone");
+      setTimezoneState(stored || "auto");
+    }
+  }, []);
+
+  const handleTimezoneChange = (tz: string) => {
+    setTimezoneState(tz);
+    setUserTimezone(tz);
+    setToast({ message: `Timezone set to ${getTimezoneLabel(tz)}`, variant: "success" });
+  };
+
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<ToastData>(null);
@@ -125,6 +148,30 @@ export default function SettingsPage() {
               <div className="space-y-1.5"><Label>Email</Label><Input value={session?.user?.email || ""} disabled className="bg-gray-50" /></div>
             </div>
             <p className="text-xs text-gray-500 mt-3">To update your name, visit the Profile page.</p>
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Timezone</Label>
+                  <TzSelect value={timezone} onValueChange={handleTimezoneChange}>
+                    <TzSelectTrigger>
+                      <TzSelectValue placeholder="Auto-detect" />
+                    </TzSelectTrigger>
+                    <TzSelectContent>
+                      {TIMEZONE_OPTIONS.map((tz) => (
+                        <TzSelectItem key={tz} value={tz}>
+                          {getTimezoneLabel(tz)}
+                        </TzSelectItem>
+                      ))}
+                    </TzSelectContent>
+                  </TzSelect>
+                  <p className="text-[11px] text-gray-400">
+                    {timezone === "auto"
+                      ? `Auto-detected: ${detectTimezone()}`
+                      : "All dates and times will use this timezone"}
+                  </p>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
 

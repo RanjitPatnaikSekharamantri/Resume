@@ -21,6 +21,7 @@ import {
   Area,
 } from "recharts";
 import { getStatusLabel } from "@/lib/utils";
+import { getUserTimezone } from "@/lib/timezone";
 import {
   Briefcase,
   TrendingUp,
@@ -115,7 +116,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("/api/analytics")
+    fetch(`/api/analytics?tz=${encodeURIComponent(getUserTimezone())}`)
       .then((r) => r.json())
       .then(setData)
       .catch(() => {})

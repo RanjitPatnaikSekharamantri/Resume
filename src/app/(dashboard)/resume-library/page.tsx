@@ -46,7 +46,7 @@ import {
   CloudUpload,
   Briefcase,
 } from "lucide-react";
-import { formatDate } from "@/lib/utils";
+import { formatToUserTime } from "@/lib/timezone";
 
 // ── constants ──
 
@@ -792,7 +792,7 @@ function ResumeCard({
             </Badge>
           </div>
           <span className="text-[11px] text-gray-400 shrink-0">
-            {formatDate(resume.updatedAt)}
+            {formatToUserTime(resume.updatedAt)}
           </span>
         </div>
       </CardContent>

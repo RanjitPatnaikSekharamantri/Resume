@@ -52,11 +52,11 @@ import {
   StickyNote,
 } from "lucide-react";
 import {
-  formatDate,
   getStatusLabel,
   getStatusColor,
   APPLICATION_STATUSES,
 } from "@/lib/utils";
+import { formatToUserTime } from "@/lib/timezone";
 
 // ── types ──
 
@@ -418,7 +418,7 @@ export default function ApplicationDetailPage() {
                       <MetaField
                         icon={<CalendarDays className="w-3.5 h-3.5" />}
                         label="Posted"
-                        value={formatDate(app.postedDate)}
+                        value={formatToUserTime(app.postedDate)}
                       />
                     )}
                     <div>
@@ -569,8 +569,8 @@ export default function ApplicationDetailPage() {
               <CardTitle className="text-sm">Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <SidebarRow label="Created" value={formatDate(app.createdAt)} />
-              <SidebarRow label="Updated" value={formatDate(app.updatedAt)} />
+              <SidebarRow label="Created" value={formatToUserTime(app.createdAt)} />
+              <SidebarRow label="Updated" value={formatToUserTime(app.updatedAt)} />
               <Separator />
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -631,7 +631,7 @@ export default function ApplicationDetailPage() {
                           {act.description}
                         </p>
                         <p className="text-[11px] text-gray-400 mt-0.5">
-                          {formatDate(act.createdAt)}
+                          {formatToUserTime(act.createdAt)}
                         </p>
                       </div>
                     </div>

@@ -165,7 +165,7 @@ export async function PATCH(
           applicationId: id,
           type: "reminder_set",
           description: data.followUpDate
-            ? `Follow-up set for ${new Date(data.followUpDate as Date).toLocaleDateString()}`
+            ? `Follow-up set for ${new Date(data.followUpDate as Date).toISOString().slice(0, 10)}`
             : "Follow-up reminder cleared",
         },
       });

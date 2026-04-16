@@ -9,7 +9,8 @@ import { ApplicationForm, ApplicationFormData } from "@/components/applications/
 import { KanbanCardData } from "@/components/kanban/kanban-card";
 import { Plus, LayoutGrid, List, Briefcase } from "lucide-react";
 import Link from "next/link";
-import { getStatusLabel, getStatusColor, formatDate } from "@/lib/utils";
+import { getStatusLabel, getStatusColor } from "@/lib/utils";
+import { formatToUserTime } from "@/lib/timezone";
 import { Card, CardContent } from "@/components/ui/card";
 
 type ViewMode = "kanban" | "list";
@@ -214,7 +215,7 @@ export default function ApplicationsPage() {
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-500">
-                      {formatDate(app.updatedAt)}
+                      {formatToUserTime(app.updatedAt)}
                     </td>
                   </tr>
                 ))}

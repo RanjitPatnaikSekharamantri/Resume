@@ -37,7 +37,7 @@ import {
   GitCompare,
   Download,
 } from "lucide-react";
-import { formatDate } from "@/lib/utils";
+import { formatToUserTime } from "@/lib/timezone";
 import { cn } from "@/lib/utils";
 
 // ── types ──
@@ -403,7 +403,7 @@ export function CoverLetterSection({
                             Cover Letter v{cl.version}
                           </p>
                           <p className="text-xs text-gray-500">
-                            {formatDate(cl.createdAt)} ·{" "}
+                            {formatToUserTime(cl.createdAt)} ·{" "}
                             {cl.content.length.toLocaleString()} chars
                           </p>
                         </div>

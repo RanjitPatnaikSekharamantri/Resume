@@ -19,6 +19,7 @@ import {
   Mail,
 } from "lucide-react";
 import { getStatusLabel, getStatusColor, APPLICATION_STATUSES, cn } from "@/lib/utils";
+import { formatShortDate, getUserTimezone } from "@/lib/timezone";
 
 interface Application {
   id: string;
@@ -60,7 +61,7 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([
       fetch("/api/applications").then((r) => r.json()),
-      fetch("/api/analytics").then((r) => r.json()),
+      fetch(`/api/analytics?tz=${encodeURIComponent(getUserTimezone())}`).then((r) => r.json()),
     ])
       .then(([apps, analytics]) => {
         setApplications(Array.isArray(apps) ? apps : []);
@@ -263,7 +264,7 @@ export default function DashboardPage() {
                         <p className="text-[11px] text-gray-500">{r.company}</p>
                       </div>
                       <span className="text-[11px] text-amber-600 font-medium shrink-0">
-                        {new Date(r.followUpDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        {formatShortDate(r.followUpDate)}
                       </span>
                     </Link>
                   ))}

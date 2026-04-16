@@ -2,10 +2,13 @@ import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const { error, userId } = await authenticateRequest();
     if (error) return error;
+
+    const url = new URL(req.url);
+    const userTz = url.searchParams.get("tz") || "UTC";
 
     const applications = await prisma.application.findMany({
       where: { userId: userId! },
@@ -59,10 +62,12 @@ export async function GET() {
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekEnd.getDate() + 7);
 
-      const label = weekStart.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-      });
+      let label: string;
+      try {
+        label = weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: userTz });
+      } catch {
+        label = weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+      }
 
       const count = applications.filter((a) => {
         const d = new Date(a.createdAt);
@@ -130,19 +135,32 @@ export async function GET() {
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
-    // Daily application streak using UTC dates for consistency
+    // Daily application streak using user timezone for correct day boundaries
     let streak = 0;
     if (sortedByDate.length > 0) {
-      const dayMs = 24 * 60 * 60 * 1000;
-      const todayUtc = Math.floor(Date.now() / dayMs);
-      const appDays = new Set(
-        sortedByDate.map((a) => Math.floor(new Date(a.createdAt).getTime() / dayMs))
-      );
-      let checkDay = todayUtc;
-      if (!appDays.has(checkDay)) checkDay--;
+      const toDay = (d: Date) => {
+        try {
+          const parts = new Intl.DateTimeFormat("en-CA", { timeZone: userTz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+          return parts;
+        } catch {
+          return d.toISOString().slice(0, 10);
+        }
+      };
+
+      const todayStr = toDay(new Date());
+      const appDays = new Set(sortedByDate.map((a) => toDay(new Date(a.createdAt))));
+
+      const advanceDay = (dateStr: string, offset: number) => {
+        const d = new Date(dateStr + "T12:00:00Z");
+        d.setUTCDate(d.getUTCDate() + offset);
+        return d.toISOString().slice(0, 10);
+      };
+
+      let checkDay = todayStr;
+      if (!appDays.has(checkDay)) checkDay = advanceDay(checkDay, -1);
       while (appDays.has(checkDay)) {
         streak++;
-        checkDay--;
+        checkDay = advanceDay(checkDay, -1);
       }
     }
 

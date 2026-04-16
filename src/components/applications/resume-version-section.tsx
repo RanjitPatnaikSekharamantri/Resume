@@ -35,7 +35,8 @@ import {
   Check,
   Link2,
 } from "lucide-react";
-import { formatDate, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { formatToUserTime } from "@/lib/timezone";
 
 interface ResumeVersion {
   id: string;
@@ -299,7 +300,7 @@ export function ResumeVersionSection({
                             )}
                           </div>
                           <p className="text-xs text-gray-500">
-                            {formatDate(rv.createdAt)}
+                            {formatToUserTime(rv.createdAt)}
                             {rv.baseResume && (
                               <span> · From: {rv.baseResume.name}</span>
                             )}
