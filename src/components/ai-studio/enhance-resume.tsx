@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Lock,
   Copy,
+  Wand2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MatchScoreCard } from "@/components/applications/match-score-card";
@@ -119,19 +120,39 @@ const SECTION_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 const STEP_LABELS: Record<Step, string> = {
   1: "Review",
-  2: "Score",
-  3: "Sections",
-  4: "Rules",
-  5: "Enhance",
-  6: "Compare",
-  7: "Save",
+  2: "Role alignment",
+  3: "Score",
+  4: "Sections",
+  5: "Rules",
+  6: "Enhance",
+  7: "Compare",
+  8: "Save",
 };
 
-type HeaderRoleMode = "application" | "original" | "custom";
+type HeaderRoleMode = "application" | "original" | "custom" | "suggested";
+type ExperienceAlignMode = "keep" | "smart" | "manual";
+
+interface DetectedRolesResponse {
+  header: {
+    current: string;
+    targetSuggested: string;
+    variants: string[];
+    family: string | null;
+    seniority: string | null;
+    reason: string;
+  };
+  experience: Array<{
+    index: number;
+    originalTitle: string;
+    suggestedTitle: string;
+    preservedSuffix: string;
+    reason: string;
+  }>;
+}
 
 export function EnhanceResume({
   resumes,
@@ -163,13 +184,33 @@ export function EnhanceResume({
   // use in the summary opening + cover letter self-description.
   const [headerRoleMode, setHeaderRoleMode] = useState<HeaderRoleMode>("application");
   const [customHeaderRole, setCustomHeaderRole] = useState("");
+
+  // Role-alignment step state
+  const [detectedRoles, setDetectedRoles] = useState<DetectedRolesResponse | null>(null);
+  const [detectingRoles, setDetectingRoles] = useState(false);
+  const [detectError, setDetectError] = useState("");
+  const [experienceAlignMode, setExperienceAlignMode] = useState<ExperienceAlignMode>("smart");
+  // Per-row approved title — keyed by experience index.
+  const [experienceOverrides, setExperienceOverrides] = useState<
+    Record<number, string>
+  >({});
+  const [rolesConfirmed, setRolesConfirmed] = useState(false);
+
+  // Unconfirm role alignment if the user changes any relevant input
+  // afterwards, so they re-approve before proceeding.
+  useEffect(() => {
+    setRolesConfirmed(false);
+  }, [headerRoleMode, customHeaderRole, experienceAlignMode, experienceOverrides]);
+
   // Resolved effective header role based on the selected mode.
   const effectiveHeaderRole =
     headerRoleMode === "application"
       ? role.trim()
-      : headerRoleMode === "custom"
-        ? customHeaderRole.trim()
-        : ""; // "original" — empty tells the server "don't touch the header"
+      : headerRoleMode === "suggested"
+        ? (detectedRoles?.header.targetSuggested || role).trim()
+        : headerRoleMode === "custom"
+          ? customHeaderRole.trim()
+          : ""; // "original" — empty tells the server "don't touch the header"
 
   // Section selection — the user must choose which sections to enhance
   // before proceeding past step 4.
@@ -244,13 +285,60 @@ export function EnhanceResume({
     jobDescription.trim()
   );
 
-  // ── step 2: fetch baseline score ──
+  // ── step 2: detect target role + suggest experience alignment ──
+  useEffect(() => {
+    if (step !== 2 || !contextReady || detectedRoles) return;
+    let cancelled = false;
+    setDetectingRoles(true);
+    setDetectError("");
+    fetch("/api/ai/detect-roles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        resumeId: selectedResume,
+        jobDescription: jobDescription.trim(),
+        applicationJobTitle: role.trim(),
+      }),
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          const err = await r.json().catch(() => null);
+          throw new Error(err?.error || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then((data: DetectedRolesResponse) => {
+        if (cancelled) return;
+        setDetectedRoles(data);
+        // Seed experienceOverrides with the SUGGESTED titles so the
+        // default "smart" mode immediately reflects the proposal.
+        const seeded: Record<number, string> = {};
+        for (const row of data.experience) {
+          if (row.suggestedTitle && row.suggestedTitle !== row.originalTitle) {
+            seeded[row.index] = row.suggestedTitle;
+          }
+        }
+        setExperienceOverrides(seeded);
+      })
+      .catch((err) => {
+        if (!cancelled) setDetectError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setDetectingRoles(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, contextReady]);
+
+  // ── step 3: fetch baseline score ──
   //
   // Uses the same scoring engine as every other screen (see
   // /api/ai/match-score). The resume text comes from parsing the selected
   // base resume via /api/ai/recommend-rules which parses the DOCX.
   useEffect(() => {
-    if (step !== 2 || !contextReady || baselineScore) return;
+    if (step !== 3 || !contextReady || baselineScore) return;
     let cancelled = false;
     setBaselineLoading(true);
     fetch("/api/ai/recommend-rules", {
@@ -346,6 +434,27 @@ export function EnhanceResume({
     setAfterScore(null);
 
     try {
+      // Only include experience overrides for rows the user actually
+      // approved. In "keep" mode we send none; in "smart"/"manual" we
+      // send whatever the user confirmed via the Role Alignment step.
+      const overridesForRequest: Record<string, string> =
+        experienceAlignMode === "keep"
+          ? {}
+          : Object.fromEntries(
+              Object.entries(experienceOverrides).filter(
+                ([, v]) => typeof v === "string" && v.trim()
+              )
+            );
+
+      // headerRole body-field contract:
+      //   - omitted        → server uses application target role
+      //   - empty string   → "keep original header"
+      //   - non-empty      → use this exact value
+      const headerRoleBody =
+        headerRoleMode === "original"
+          ? ""
+          : effectiveHeaderRole || undefined;
+
       const res = await fetch("/api/ai/enhance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -354,8 +463,9 @@ export function EnhanceResume({
           jobDescription: jobDescription.trim(),
           role: role.trim(),
           company: company.trim(),
-          headerRole: effectiveHeaderRole || undefined,
+          headerRole: headerRoleBody,
           sectionsToEnhance: [...sectionsToEnhance],
+          experienceRoleOverrides: overridesForRequest,
           rules: {
             noNewSkills,
             preserveLength,
@@ -384,7 +494,7 @@ export function EnhanceResume({
       if (data.scores?.enhanced) setAfterScore(data.scores.enhanced);
 
       onToast({ message: "Resume enhanced", variant: "success" });
-      setStep(6);
+      setStep(7);
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -497,41 +607,46 @@ export function EnhanceResume({
 
   // ── step gating ──
   //
-  // 7-step wizard:
-  //   1. Review     — context + target-role selection
-  //   2. Score      — Base Resume Score
-  //   3. Sections   — which sections to enhance
-  //   4. Rules      — rule recommendations + manual overrides
-  //   5. Enhance    — run the enhancement
-  //   6. Compare    — Base vs Enhanced score + preview
-  //   7. Save       — save as ResumeVersion + download
+  // 8-step wizard:
+  //   1. Review         — context + base resume
+  //   2. Role Alignment — header role + per-role experience alignment
+  //   3. Score          — Base Resume Score
+  //   4. Sections       — which sections to enhance
+  //   5. Rules          — rule recommendations + manual overrides
+  //   6. Enhance        — run the enhancement
+  //   7. Compare        — Base vs Enhanced score + preview
+  //   8. Save           — save as ResumeVersion + download
 
   const canAdvanceFrom = useCallback(
     (s: Step): boolean => {
       switch (s) {
         case 1:
-          // Require context + a valid header-role selection when custom.
+          return contextReady;
+        case 2:
+          // User must confirm the role alignment step — either accept the
+          // suggestions, pick "keep original", or pick manual.
           return (
-            contextReady &&
+            rolesConfirmed &&
             (headerRoleMode !== "custom" || customHeaderRole.trim().length > 0)
           );
-        case 2:
-          return true;
         case 3:
-          return sectionsToEnhance.size > 0;
+          return true;
         case 4:
-          return recommendation === null || recommendationDecision !== "pending";
+          return sectionsToEnhance.size > 0;
         case 5:
-          return !!result;
+          return recommendation === null || recommendationDecision !== "pending";
         case 6:
           return !!result;
         case 7:
+          return !!result;
+        case 8:
         default:
           return true;
       }
     },
     [
       contextReady,
+      rolesConfirmed,
       headerRoleMode,
       customHeaderRole,
       sectionsToEnhance.size,
@@ -541,12 +656,12 @@ export function EnhanceResume({
     ]
   );
 
-  const goNext = () => setStep((s) => (s < 7 ? ((s + 1) as Step) : s));
+  const goNext = () => setStep((s) => (s < 8 ? ((s + 1) as Step) : s));
   const goBack = () => setStep((s) => (s > 1 ? ((s - 1) as Step) : s));
 
   const stepper = (
     <div className="flex items-center gap-1 overflow-x-auto pb-1">
-      {([1, 2, 3, 4, 5, 6, 7] as Step[]).map((s, idx) => (
+      {([1, 2, 3, 4, 5, 6, 7, 8] as Step[]).map((s, idx) => (
         <React.Fragment key={s}>
           <button
             type="button"
@@ -585,7 +700,7 @@ export function EnhanceResume({
             </span>
             <span className="hidden sm:inline">{STEP_LABELS[s]}</span>
           </button>
-          {idx < 6 && <ArrowRight className="w-3 h-3 text-gray-300 shrink-0" />}
+          {idx < 7 && <ArrowRight className="w-3 h-3 text-gray-300 shrink-0" />}
         </React.Fragment>
       ))}
     </div>
@@ -645,62 +760,6 @@ export function EnhanceResume({
           )}
         </div>
 
-        {/* Target / Header Role control */}
-        <div className="space-y-2 rounded-lg border border-gray-200 p-3 bg-gray-50/40">
-          <div>
-            <Label>Resume header / target role</Label>
-            <p className="text-[11px] text-gray-500 mt-0.5">
-              This role appears in the resume header, the profile summary
-              opening, and the cover letter self-description — all kept in
-              sync.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-            <HeaderRoleOption
-              label="Application role"
-              description={role.trim() || "(none)"}
-              active={headerRoleMode === "application"}
-              onClick={() => setHeaderRoleMode("application")}
-              disabled={!role.trim()}
-            />
-            <HeaderRoleOption
-              label="Keep original"
-              description="Don't change resume header"
-              active={headerRoleMode === "original"}
-              onClick={() => setHeaderRoleMode("original")}
-            />
-            <HeaderRoleOption
-              label="Custom role"
-              description={customHeaderRole.trim() || "enter below"}
-              active={headerRoleMode === "custom"}
-              onClick={() => setHeaderRoleMode("custom")}
-            />
-          </div>
-          {headerRoleMode === "custom" && (
-            <input
-              type="text"
-              value={customHeaderRole}
-              onChange={(e) => setCustomHeaderRole(e.target.value)}
-              placeholder="e.g. Senior Cyber Security Engineer"
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-            />
-          )}
-          {effectiveHeaderRole && (
-            <p className="text-[11px] text-gray-600">
-              Effective header role:{" "}
-              <span className="font-semibold text-gray-900">
-                {effectiveHeaderRole}
-              </span>
-            </p>
-          )}
-          {headerRoleMode === "original" && (
-            <p className="text-[11px] text-gray-500">
-              Keeping the original resume header. Summary &amp; cover letter
-              will still reference the target application role.
-            </p>
-          )}
-        </div>
-
         <div className="space-y-1.5">
           <Label>Job Description (prefilled from application)</Label>
           <div className="max-h-36 overflow-y-auto text-sm text-gray-700 whitespace-pre-wrap leading-relaxed rounded-lg border border-gray-200 bg-gray-50/50 px-3 py-2">
@@ -735,7 +794,291 @@ export function EnhanceResume({
     </Card>
   );
 
-  const renderStep2 = () => (
+  // Step 2 — Role Alignment.
+  // Detects the target role from the JD, lets the user pick how to handle
+  // the resume header, and lets them approve smart alignments for each
+  // existing experience entry.
+  const renderStep2RoleAlignment = () => (
+    <Card>
+      <CardContent className="p-6 space-y-5">
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
+            <Wand2 className="w-4 h-4 text-blue-600" />
+            Role alignment
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            We analyse the JD and your base resume, then suggest how to
+            align your role title for this application. Nothing is changed
+            until you confirm.
+          </p>
+        </div>
+
+        {detectingRoles ? (
+          <div className="rounded-lg border border-gray-200 p-8 text-center">
+            <Loader2 className="w-5 h-5 animate-spin text-gray-400 mx-auto mb-2" />
+            <p className="text-xs text-gray-500">
+              Detecting target role and analyzing experience titles...
+            </p>
+          </div>
+        ) : detectError ? (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">
+            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
+            <span>{detectError}</span>
+          </div>
+        ) : detectedRoles ? (
+          <>
+            {/* ── Header role ── */}
+            <div className="space-y-2 rounded-lg border border-gray-200 p-3">
+              <div>
+                <Label>Resume header role</Label>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  This appears as the title under your name on the resume,
+                  in the profile summary opening, and in the cover letter
+                  self-description — kept in sync everywhere.
+                </p>
+              </div>
+
+              {/* Preview: old → new */}
+              <div className="flex items-center gap-2 text-[11px] text-gray-600 mt-1">
+                <span className="rounded-md bg-gray-100 px-2 py-0.5">
+                  {detectedRoles.header.current || "(none detected)"}
+                </span>
+                <ArrowRight className="w-3 h-3 text-gray-400" />
+                <span className="rounded-md bg-blue-50 text-blue-800 px-2 py-0.5 font-medium">
+                  {effectiveHeaderRole ||
+                    (headerRoleMode === "original"
+                      ? detectedRoles.header.current || "(unchanged)"
+                      : "(none)")}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mt-2">
+                <HeaderRoleOption
+                  label="Suggested"
+                  description={detectedRoles.header.targetSuggested || "(none)"}
+                  active={headerRoleMode === "suggested"}
+                  onClick={() => setHeaderRoleMode("suggested")}
+                  disabled={!detectedRoles.header.targetSuggested}
+                />
+                <HeaderRoleOption
+                  label="Application role"
+                  description={role.trim() || "(none)"}
+                  active={headerRoleMode === "application"}
+                  onClick={() => setHeaderRoleMode("application")}
+                  disabled={!role.trim()}
+                />
+                <HeaderRoleOption
+                  label="Keep original"
+                  description={detectedRoles.header.current || "(no header found)"}
+                  active={headerRoleMode === "original"}
+                  onClick={() => setHeaderRoleMode("original")}
+                />
+                <HeaderRoleOption
+                  label="Custom role"
+                  description={customHeaderRole.trim() || "enter below"}
+                  active={headerRoleMode === "custom"}
+                  onClick={() => setHeaderRoleMode("custom")}
+                />
+              </div>
+
+              {headerRoleMode === "custom" && (
+                <input
+                  type="text"
+                  value={customHeaderRole}
+                  onChange={(e) => setCustomHeaderRole(e.target.value)}
+                  placeholder="e.g. Cyber Security Analyst"
+                  className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                />
+              )}
+
+              {detectedRoles.header.reason && (
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  {detectedRoles.header.reason}
+                </p>
+              )}
+
+              {detectedRoles.header.variants.length > 1 && (
+                <div className="flex flex-wrap items-center gap-1 pt-1">
+                  <span className="text-[10px] uppercase tracking-wider text-gray-400 mr-1">
+                    Other variants
+                  </span>
+                  {detectedRoles.header.variants.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => {
+                        setHeaderRoleMode("custom");
+                        setCustomHeaderRole(v);
+                      }}
+                      className="text-[11px] rounded-md border border-gray-200 bg-white px-2 py-0.5 hover:bg-gray-50"
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Experience role alignment ── */}
+            <div className="space-y-2 rounded-lg border border-gray-200 p-3">
+              <div>
+                <Label>Work experience role titles</Label>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  Choose how to handle the role titles on each past job.
+                  Company name, location, and dates are NEVER changed.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <HeaderRoleOption
+                  label="Keep all titles"
+                  description="No changes"
+                  active={experienceAlignMode === "keep"}
+                  onClick={() => {
+                    setExperienceAlignMode("keep");
+                    setExperienceOverrides({});
+                  }}
+                />
+                <HeaderRoleOption
+                  label="Smart alignment"
+                  description="Apply suggested swaps"
+                  active={experienceAlignMode === "smart"}
+                  onClick={() => {
+                    setExperienceAlignMode("smart");
+                    const seeded: Record<number, string> = {};
+                    for (const row of detectedRoles.experience) {
+                      if (
+                        row.suggestedTitle &&
+                        row.suggestedTitle !== row.originalTitle
+                      ) {
+                        seeded[row.index] = row.suggestedTitle;
+                      }
+                    }
+                    setExperienceOverrides(seeded);
+                  }}
+                />
+                <HeaderRoleOption
+                  label="Manual"
+                  description="Edit each title"
+                  active={experienceAlignMode === "manual"}
+                  onClick={() => setExperienceAlignMode("manual")}
+                />
+              </div>
+
+              {detectedRoles.experience.length === 0 ? (
+                <p className="text-[11px] text-gray-500">
+                  No work-experience role headers detected in this resume.
+                </p>
+              ) : (
+                <div className="space-y-2 mt-1">
+                  {detectedRoles.experience.map((row) => {
+                    const aligned =
+                      experienceAlignMode === "keep"
+                        ? row.originalTitle
+                        : experienceOverrides[row.index] || row.originalTitle;
+                    const changed = aligned !== row.originalTitle;
+                    return (
+                      <div
+                        key={row.index}
+                        className={cn(
+                          "rounded-lg border p-2.5 space-y-1",
+                          changed
+                            ? "border-blue-200 bg-blue-50/40"
+                            : "border-gray-100 bg-white"
+                        )}
+                      >
+                        <div className="flex items-center gap-2 text-[11px] text-gray-600">
+                          <span className="rounded bg-gray-100 px-1.5 py-0.5">
+                            {row.originalTitle}
+                          </span>
+                          <ArrowRight className="w-3 h-3 text-gray-400" />
+                          {experienceAlignMode === "manual" ? (
+                            <input
+                              type="text"
+                              value={aligned}
+                              onChange={(e) =>
+                                setExperienceOverrides((prev) => ({
+                                  ...prev,
+                                  [row.index]: e.target.value,
+                                }))
+                              }
+                              className="flex-1 rounded border border-gray-200 bg-white px-2 py-0.5 text-[11px] shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            />
+                          ) : (
+                            <span
+                              className={cn(
+                                "rounded px-1.5 py-0.5",
+                                changed
+                                  ? "bg-blue-100 text-blue-800 font-medium"
+                                  : "bg-gray-100 text-gray-700"
+                              )}
+                            >
+                              {aligned}
+                            </span>
+                          )}
+                          {row.preservedSuffix && (
+                            <span className="text-gray-400 truncate">
+                              {row.preservedSuffix}
+                            </span>
+                          )}
+                        </div>
+                        {row.reason && experienceAlignMode !== "keep" && (
+                          <p className="text-[10px] text-gray-500 pl-1">
+                            {row.reason}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {experienceAlignMode === "smart" &&
+                Object.keys(experienceOverrides).length === 0 && (
+                  <p className="text-[10px] text-gray-500">
+                    No realistic alignment changes were proposed for this
+                    resume — all titles will stay as they are.
+                  </p>
+                )}
+            </div>
+
+            {/* Confirm */}
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <div className="text-[11px] text-gray-500 leading-relaxed">
+                {rolesConfirmed
+                  ? "Role alignment confirmed. You can revisit this step anytime."
+                  : "Confirm to proceed. Nothing is changed yet — alignment is applied during enhancement."}
+              </div>
+              <Button
+                variant={rolesConfirmed ? "outline" : "primary"}
+                size="sm"
+                onClick={() => setRolesConfirmed(true)}
+                disabled={
+                  rolesConfirmed ||
+                  (headerRoleMode === "custom" && !customHeaderRole.trim())
+                }
+              >
+                {rolesConfirmed ? (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                    Confirmed
+                  </>
+                ) : (
+                  "Confirm role alignment"
+                )}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500">
+            Waiting for context...
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  const renderStep3Score = () => (
     <Card>
       <CardContent className="p-6 space-y-4">
         <div>
@@ -783,8 +1126,8 @@ export function EnhanceResume({
     </Card>
   );
 
-  // Step 3 — Sections only.
-  const renderStep3Sections = () => (
+  // Step 4 — Sections only.
+  const renderStep4Sections = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
@@ -871,8 +1214,8 @@ export function EnhanceResume({
     </Card>
   );
 
-  // Step 4 — Rules + recommendations.
-  const renderStep4Rules = () => (
+  // Step 5 — Rules + recommendations.
+  const renderStep5Rules = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
@@ -1078,8 +1421,8 @@ export function EnhanceResume({
     </Card>
   );
 
-  // Step 5 — Enhance trigger.
-  const renderStep5Enhance = () => (
+  // Step 6 — Enhance trigger.
+  const renderStep6Enhance = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
@@ -1188,8 +1531,8 @@ export function EnhanceResume({
     </Card>
   );
 
-  // Step 6 — Compare scores + preview.
-  const renderStep6Compare = () => {
+  // Step 7 — Compare scores + preview.
+  const renderStep7Compare = () => {
     if (!result) {
       return (
         <Card>
@@ -1306,7 +1649,7 @@ export function EnhanceResume({
                     variant="ghost"
                     size="sm"
                     className="h-7"
-                    onClick={() => setStep(4)}
+                    onClick={() => setStep(5)}
                   >
                     Adjust rules
                   </Button>
@@ -1386,8 +1729,8 @@ export function EnhanceResume({
     );
   };
 
-  // Step 7 — Save + download.
-  const renderStep7Save = () => (
+  // Step 8 — Save + download.
+  const renderStep8Save = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
@@ -1473,21 +1816,22 @@ export function EnhanceResume({
       {stepper}
 
       {step === 1 && renderStep1()}
-      {step === 2 && renderStep2()}
-      {step === 3 && renderStep3Sections()}
-      {step === 4 && renderStep4Rules()}
-      {step === 5 && renderStep5Enhance()}
-      {step === 6 && renderStep6Compare()}
-      {step === 7 && renderStep7Save()}
+      {step === 2 && renderStep2RoleAlignment()}
+      {step === 3 && renderStep3Score()}
+      {step === 4 && renderStep4Sections()}
+      {step === 5 && renderStep5Rules()}
+      {step === 6 && renderStep6Enhance()}
+      {step === 7 && renderStep7Compare()}
+      {step === 8 && renderStep8Save()}
 
       <div className="flex items-center justify-between">
         <Button variant="outline" size="sm" onClick={goBack} disabled={step === 1}>
           <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
           Back
         </Button>
-        {step < 7 && (
+        {step < 8 && (
           <Button
-            variant={step === 5 ? "outline" : "primary"}
+            variant={step === 6 ? "outline" : "primary"}
             size="sm"
             onClick={goNext}
             disabled={nextDisabled}

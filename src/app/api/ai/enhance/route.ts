@@ -19,6 +19,10 @@ import {
 } from "@/lib/llm-provider";
 import { enhanceWithLLM } from "@/lib/llm-enhance";
 import { calculateMatchScore } from "@/lib/match-scoring";
+import {
+  applyExperienceRoleOverrides,
+  type ExperienceRoleOverrides,
+} from "@/lib/role-alignment";
 
 /**
  * Sections the enhancement engine is allowed to modify.
@@ -68,7 +72,17 @@ export async function POST(req: Request) {
       headerRole,
       sectionsToEnhance,
       rules,
-    } = body;
+      experienceRoleOverrides,
+    } = body as {
+      resumeId: string;
+      jobDescription: string;
+      role: string;
+      company: string;
+      headerRole?: string;
+      sectionsToEnhance?: string[];
+      rules?: Record<string, unknown>;
+      experienceRoleOverrides?: Record<string, string> | null;
+    };
 
     if (!resumeId) {
       return NextResponse.json({ error: "Resume ID is required" }, { status: 400 });
@@ -119,13 +133,39 @@ export async function POST(req: Request) {
     ).filter((s: string) => VALID_SECTION_KINDS.has(s as SectionKind)) as SectionKind[];
 
     // Desired header role — explicit value from client, otherwise target role.
-    const effectiveHeaderRole = (headerRole || role || "").trim();
+    // An empty string is a SIGNAL from the client that the user picked
+    // "Keep original header" — in that case we do NOT touch the header.
+    const effectiveHeaderRole =
+      typeof headerRole === "string" ? headerRole.trim() : (role || "").trim();
+    const keepOriginalHeader = headerRole === "";
 
     // Apply the header role BEFORE enhancement so both engines see the
     // updated header as context.
-    const withHeader = effectiveHeaderRole
-      ? applyHeaderRole(parsed, effectiveHeaderRole)
-      : parsed;
+    let withHeader = parsed;
+    if (!keepOriginalHeader && effectiveHeaderRole) {
+      withHeader = applyHeaderRole(parsed, effectiveHeaderRole);
+    }
+
+    // Apply user-approved experience role overrides. Each override only
+    // touches the role title segment — company / location / dates are
+    // preserved verbatim. Keys are numeric strings in JSON, so convert.
+    let roleAlignedExperience = false;
+    if (experienceRoleOverrides && typeof experienceRoleOverrides === "object") {
+      const clean: ExperienceRoleOverrides = {};
+      for (const [k, v] of Object.entries(experienceRoleOverrides)) {
+        if (typeof v === "string" && v.trim()) {
+          const idx = Number(k);
+          if (Number.isFinite(idx) && idx >= 0) {
+            clean[idx] = v.trim();
+          }
+        }
+      }
+      if (Object.keys(clean).length > 0) {
+        withHeader = applyExperienceRoleOverrides(withHeader, clean);
+        roleAlignedExperience = true;
+        log(`applied ${Object.keys(clean).length} experience role override(s)`);
+      }
+    }
 
     // ── AI provider path ──
 
@@ -238,7 +278,11 @@ export async function POST(req: Request) {
       resumeName: resume.name,
       fileName: resume.fileName,
       emphasizeTokens,
-      headerRole: effectiveHeaderRole,
+      headerRole: keepOriginalHeader ? null : effectiveHeaderRole,
+      keepOriginalHeader,
+      experienceRoleAlignments: roleAlignedExperience
+        ? Object.keys(experienceRoleOverrides || {}).length
+        : 0,
       scores: {
         base: baseScore,
         enhanced: enhancedScore,
