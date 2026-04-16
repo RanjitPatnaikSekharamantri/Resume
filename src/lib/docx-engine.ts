@@ -265,10 +265,21 @@ function enhanceExperience(
   return { ...section, lines: enhanced };
 }
 
+const BULLET_PHRASES = [
+  (kw: string) => `, applying ${kw} methodologies`,
+  (kw: string) => `, utilizing ${kw} best practices`,
+  (kw: string) => ` with focus on ${kw}`,
+  (kw: string) => `, demonstrating ${kw} proficiency`,
+  (kw: string) => ` through ${kw} implementation`,
+  (kw: string) => `, incorporating ${kw} principles`,
+];
+
+let bulletPhraseIdx = 0;
+
 function enhanceBullet(
   bullet: string,
   keywords: string[],
-  options: EnhanceOptions
+  _options: EnhanceOptions
 ): string {
   let text = bullet.trim();
   const lowerText = text.toLowerCase();
@@ -279,7 +290,9 @@ function enhanceBullet(
 
   if (relevantKeyword) {
     text = text.replace(/\.?\s*$/, "");
-    text += `, leveraging ${relevantKeyword.toLowerCase()} expertise.`;
+    const phrase = BULLET_PHRASES[bulletPhraseIdx % BULLET_PHRASES.length];
+    text += phrase(relevantKeyword.toLowerCase()) + ".";
+    bulletPhraseIdx++;
   }
 
   return text;
@@ -308,7 +321,8 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
       );
     }
 
-    for (const line of section.lines) {
+    for (let lineIdx = 0; lineIdx < section.lines.length; lineIdx++) {
+      const line = section.lines[lineIdx];
       if (!line) {
         children.push(new Paragraph({ children: [] }));
         continue;
@@ -317,7 +331,7 @@ export async function buildDocx(parsed: ParsedResume): Promise<Buffer> {
       const isBullet = /^[•\-–—\*]/.test(line);
       const cleanLine = isBullet ? line.replace(/^[•\-–—\*]\s*/, "") : line;
 
-      if (section.kind === "header" && section.lines.indexOf(line) === 0) {
+      if (section.kind === "header" && lineIdx === 0) {
         children.push(
           new Paragraph({
             children: [

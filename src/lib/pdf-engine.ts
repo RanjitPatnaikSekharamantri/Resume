@@ -31,11 +31,14 @@ export async function buildPdf(text: string, title?: string): Promise<Buffer> {
         continue;
       }
 
-      // Detect section headings (all-caps lines or lines with ━ or ─)
+      const words = trimmed.split(/\s+/);
       const isHeading =
         /^[A-Z\s━─/&]+$/.test(trimmed) &&
-        trimmed.length > 3 &&
-        trimmed.length < 50;
+        trimmed.length > 5 &&
+        trimmed.length < 50 &&
+        words.length >= 2 &&
+        !/^\d/.test(trimmed) &&
+        !/,\s*[A-Z]{2}$/.test(trimmed);
       const isDivider = /^[━──]+$/.test(trimmed);
 
       if (isDivider) {

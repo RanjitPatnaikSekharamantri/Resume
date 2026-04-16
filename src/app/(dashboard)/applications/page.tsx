@@ -66,14 +66,18 @@ export default function ApplicationsPage() {
     newStatus: string
   ) => {
     try {
-      await fetch("/api/applications/reorder", {
+      const res = await fetch("/api/applications/reorder", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ applicationId, newStatus, newOrder: 0 }),
       });
+      if (!res.ok) {
+        fetchApplications();
+        return;
+      }
       fetchApplications();
     } catch {
-      // ignore
+      fetchApplications();
     }
   };
 

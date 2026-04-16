@@ -123,20 +123,26 @@ const SENIORITY_KEYWORDS: Record<string, string[]> = {
 
 function computeExperienceMatch(jd: string, resume: string, jobTitle?: string): number {
   const jdFull = `${jd} ${jobTitle || ""}`.toLowerCase();
-  let score = 50;
 
   const jdLevel = detectSeniority(jdFull);
   const resumeLevel = detectSeniority(resume);
 
+  let levelScore = 0;
+  let hasLevelSignal = false;
+
   if (jdLevel && resumeLevel) {
+    hasLevelSignal = true;
     const levels = ["junior", "mid", "senior", "management"];
     const jdIdx = levels.indexOf(jdLevel);
     const resumeIdx = levels.indexOf(resumeLevel);
     const diff = Math.abs(jdIdx - resumeIdx);
 
-    if (diff === 0) score = 95;
-    else if (diff === 1) score = 70;
-    else score = 40;
+    if (diff === 0) levelScore = 90;
+    else if (diff === 1) levelScore = 60;
+    else levelScore = 25;
+  } else if (jdLevel || resumeLevel) {
+    hasLevelSignal = true;
+    levelScore = 40;
   }
 
   const yearPatterns = [
@@ -146,23 +152,25 @@ function computeExperienceMatch(jd: string, resume: string, jobTitle?: string): 
 
   let jdYears = 0;
   let resumeYears = 0;
-
   for (const pat of yearPatterns) {
-    for (const m of jdFull.matchAll(pat)) {
-      jdYears = Math.max(jdYears, parseInt(m[1]));
-    }
-    for (const m of resume.matchAll(pat)) {
-      resumeYears = Math.max(resumeYears, parseInt(m[1]));
-    }
+    for (const m of jdFull.matchAll(pat)) jdYears = Math.max(jdYears, parseInt(m[1]));
+    for (const m of resume.matchAll(pat)) resumeYears = Math.max(resumeYears, parseInt(m[1]));
   }
+
+  let yearsScore = 0;
+  let hasYearsSignal = false;
 
   if (jdYears > 0 && resumeYears > 0) {
-    if (resumeYears >= jdYears) score = Math.min(score + 20, 100);
-    else if (resumeYears >= jdYears - 2) score = Math.min(score + 5, 90);
-    else score = Math.max(score - 15, 20);
+    hasYearsSignal = true;
+    if (resumeYears >= jdYears) yearsScore = 95;
+    else if (resumeYears >= jdYears - 2) yearsScore = 65;
+    else yearsScore = 30;
   }
 
-  return score;
+  if (hasLevelSignal && hasYearsSignal) return levelScore * 0.5 + yearsScore * 0.5;
+  if (hasLevelSignal) return levelScore;
+  if (hasYearsSignal) return yearsScore;
+  return 30;
 }
 
 function detectSeniority(text: string): string | null {

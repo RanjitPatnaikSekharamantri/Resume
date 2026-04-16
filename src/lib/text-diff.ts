@@ -70,11 +70,6 @@ function longestCommonSubsequence(a: string[], b: string[]): string[] {
 
   if (m === 0 || n === 0) return [];
 
-  // Use two rows instead of full matrix for memory efficiency
-  let prev = new Array(n + 1).fill(0);
-  let curr = new Array(n + 1).fill(0);
-
-  // Build lengths
   const dp: number[][] = [];
   for (let i = 0; i <= m; i++) {
     dp[i] = new Array(n + 1).fill(0);

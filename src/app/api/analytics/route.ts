@@ -30,9 +30,9 @@ export async function GET() {
     }
 
     // ── stage groups ──
-    const saved = statusCounts["saved"] || 0;
-    const notApplied = statusCounts["not_applied"] || 0;
-    const applied = total - saved - notApplied;
+    const applied = applications.filter((a) =>
+      ["applied", "screening", "interview", "offer", "rejected"].includes(a.status)
+    ).length;
     const screeningPlus = applications.filter((a) =>
       ["screening", "interview", "offer"].includes(a.status)
     ).length;
