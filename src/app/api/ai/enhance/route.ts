@@ -23,6 +23,9 @@ import {
   type ExperienceRoleOverrides,
 } from "@/lib/role-alignment";
 import { calculateAtsScore } from "@/lib/ats-scoring";
+import { validateEnhancement } from "@/lib/output-validator";
+import { analyzeResume } from "@/lib/resume-analysis";
+import { analyzeJobDescription } from "@/lib/jd-analysis";
 
 /**
  * Sections the enhancement engine is allowed to modify.
@@ -75,6 +78,8 @@ export async function POST(req: Request) {
       experienceRoleOverrides,
       scoringMode,
       ignorePenalties,
+      plan,
+      context,
     } = body as {
       resumeId: string;
       jobDescription: string;
@@ -88,6 +93,10 @@ export async function POST(req: Request) {
       ignorePenalties?: Array<
         "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain"
       >;
+      /** Pass 1 plan — required when calling as Pass 2. */
+      plan?: unknown;
+      /** AI context packet built alongside the plan. */
+      context?: unknown;
     };
 
     if (!resumeId) {
@@ -196,6 +205,8 @@ export async function POST(req: Request) {
             headerRole: effectiveHeaderRole,
             sectionsToEnhance: validSections,
             rules: rules || {},
+            plan,
+            context,
           },
           log
         );
@@ -231,6 +242,47 @@ export async function POST(req: Request) {
 
     // Always normalise titles so output headings match the canonical pattern.
     enhanced = normalizeSectionTitles(enhanced);
+
+    // ── Post-generation validation ──
+    //
+    // Deterministic guard that protected fields (name, contact, employers,
+    // dates, education, certifications) survived the rewrite, that only
+    // approved sections changed, and that no placeholder strings leaked
+    // into the output. Any unapproved section edits are auto-reverted.
+    const jdForValidation = analyzeJobDescription(jobDescription, role);
+    const resumeForValidation = analyzeResume(withHeader, jdForValidation);
+    const validation = validateEnhancement({
+      original: withHeader,
+      enhanced,
+      locked: {
+        name: resumeForValidation.header.name,
+        contactLines: resumeForValidation.header.contactLines,
+        companyNames: [
+          ...new Set(
+            resumeForValidation.sections.experience.roles.map((r) => r.company).filter(Boolean)
+          ),
+        ],
+        dates: (withHeader.sections.find((s) => s.kind === "experience")?.lines || []).filter((l) =>
+          /\b(19|20)\d{2}\b/.test(l)
+        ),
+        education:
+          (withHeader.sections.find((s) => s.kind === "education")?.lines || []).filter(
+            (l) => l.trim().length > 0
+          ),
+        certifications:
+          (withHeader.sections.find((s) => s.kind === "certifications")?.lines || []).filter(
+            (l) => l.trim().length > 0
+          ),
+      },
+      sectionsEnhanced: validSections,
+    });
+    if (validation.fixedSections) {
+      log(`validation auto-fixed: ${validation.autoFixedSections.join(", ")}`);
+      enhanced = {
+        sections: validation.fixedSections,
+        rawText: enhanced.rawText,
+      };
+    }
 
     // Build preview text using the enhanced (title-normalised) sections.
     const previewText = sectionsToText(enhanced.sections);
@@ -315,6 +367,11 @@ export async function POST(req: Request) {
       },
       usage: usage || null,
       engine,
+      validation: {
+        ok: validation.ok,
+        issues: validation.issues,
+        autoFixedSections: validation.autoFixedSections,
+      },
     });
   } catch (err) {
     console.error("Enhance error:", err);

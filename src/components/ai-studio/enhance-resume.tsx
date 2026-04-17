@@ -74,6 +74,11 @@ interface EnhanceResult {
     fallbackReason?: string;
     logs?: string[];
   };
+  validation?: {
+    ok: boolean;
+    issues: Array<{ severity: string; field: string; message: string }>;
+    autoFixedSections: string[];
+  };
 }
 
 interface Recommendation {
@@ -126,7 +131,7 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 const STEP_LABELS: Record<Step, string> = {
   1: "Review",
-  2: "Score & fixes",
+  2: "Analysis & plan",
   3: "Options",
   4: "Enhance",
   5: "Compare & save",
@@ -257,6 +262,60 @@ export function EnhanceResume({
   const [savedToApp, setSavedToApp] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
+  // Pass 1 plan + context packet. Pulled from /api/ai/plan on Step 2 or
+  // lazily when the user advances to Step 3 without having seen it.
+  interface PlanPayload {
+    context: unknown;
+    plan: {
+      producedBy: "llm" | "deterministic";
+      producedReason?: string;
+      summaryForUser: string;
+      targetRoleInterpretation: {
+        primaryRole: string;
+        alternatives: string[];
+        roleFamily: string | null;
+        seniority: string | null;
+      };
+      whatShouldChange: {
+        summary: string[];
+        skills: string[];
+        experience: string[];
+        headerRoleRecommendation: string | null;
+        keywordAdditions: string[];
+        domainEmphasis: string[];
+      };
+      whatMustNotChange: {
+        protectedFields: string[];
+        unverifiableClaims: string[];
+        unsupportedRoleUpgrades: string[];
+      };
+      sectionPlan: Record<string, "keep" | "light" | "heavy">;
+      risks: string[];
+      optimizationRules: {
+        rewriteIntensity: "light" | "moderate" | "aggressive";
+        preserveLength: boolean;
+        prioritizeRecent: boolean;
+        keywordInsertionRules: string[];
+        roleAlignmentMode: "keep" | "smart" | "manual";
+      };
+      expectedScoreImprovements: {
+        likelyGainPoints: number;
+        limitReason: string;
+        ceiling: number;
+      };
+    };
+    engine: {
+      kind: "llm" | "deterministic";
+      providerName: string | null;
+      providerModel: string | null;
+      fallbackReason?: string | null;
+    };
+  }
+  const [planPayload, setPlanPayload] = useState<PlanPayload | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState("");
+  const [planApproved, setPlanApproved] = useState(false);
+
   // Active provider context (shown on Step 5 so users know whether
   // enhancement will go through the LLM or the deterministic fallback).
   const [activeProvider, setActiveProvider] =
@@ -348,7 +407,80 @@ export function EnhanceResume({
   useEffect(() => {
     setBaselineScore(null);
     setBaselineAts(null);
+    setPlanPayload(null);
+    setPlanApproved(false);
   }, [scoringMode, ignoredPenalties]);
+
+  // Fetch the Pass 1 plan. Runs when the user enters Step 2 and has a
+  // usable context. Idempotent — if a plan already exists we don't refetch
+  // unless inputs changed.
+  const fetchPlan = async () => {
+    if (!contextReady) return;
+    setPlanLoading(true);
+    setPlanError("");
+    try {
+      const res = await fetch("/api/ai/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resumeId: selectedResume,
+          applicationId: applicationId || null,
+          jobDescription: jobDescription.trim(),
+          role: role.trim(),
+          company: company.trim(),
+          headerRole:
+            headerRoleMode === "original"
+              ? ""
+              : effectiveHeaderRole || undefined,
+          headerRoleMode,
+          scoringMode,
+          userControls: {
+            sectionsToEnhance: [...sectionsToEnhance],
+            rewriteIntensity,
+            preserveLength,
+            allowNewTruthfulSkills: !noNewSkills,
+            prioritizeRecent,
+            strongSummaryRewrite,
+            roleAlignmentMode:
+              experienceAlignMode === "keep"
+                ? "keep"
+                : experienceAlignMode === "manual"
+                  ? "manual"
+                  : "smart",
+            experienceRoleOverrides: experienceOverrides,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || `HTTP ${res.status}`);
+      }
+      const data: PlanPayload = await res.json();
+      setPlanPayload(data);
+      // Reset approval state because the plan is fresh.
+      setPlanApproved(false);
+      // If the plan contains baseline scoring hints, seed them.
+      if (baselineAts == null && data?.context && typeof data.context === "object") {
+        const atsRaw = (data.context as { scoring?: { current?: unknown } })?.scoring
+          ?.current;
+        if (atsRaw) {
+          // Best-effort: use /api/ai/match-score later if needed; plan gives a snapshot already
+          void atsRaw;
+        }
+      }
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  // Auto-fetch plan when user enters Step 2.
+  useEffect(() => {
+    if (step !== 2 || !contextReady || planPayload || planLoading) return;
+    fetchPlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, contextReady]);
 
   // ── step 3: fetch baseline score ──
   //
@@ -479,6 +611,10 @@ export function EnhanceResume({
           ? ""
           : effectiveHeaderRole || undefined;
 
+      // If the user didn't trigger Pass 1 explicitly but we have a plan
+      // loaded, include it. This turns the enhance call into Pass 2 of
+      // the two-pass architecture so the LLM obeys the approved plan
+      // instead of planning + generating in one shot.
       const res = await fetch("/api/ai/enhance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -499,6 +635,8 @@ export function EnhanceResume({
           },
           scoringMode,
           ignorePenalties: [...ignoredPenalties],
+          plan: planPayload?.plan,
+          context: planPayload?.context,
         }),
       });
 
@@ -651,7 +789,8 @@ export function EnhanceResume({
             (headerRoleMode !== "custom" || customHeaderRole.trim().length > 0)
           );
         case 2:
-          return true;
+          // Step 2 produces the Pass 1 plan; user must approve before Pass 2.
+          return !!planPayload && planApproved;
         case 3:
           return sectionsToEnhance.size > 0;
         case 4:
@@ -661,7 +800,15 @@ export function EnhanceResume({
           return true;
       }
     },
-    [contextReady, headerRoleMode, customHeaderRole, sectionsToEnhance.size, result]
+    [
+      contextReady,
+      headerRoleMode,
+      customHeaderRole,
+      sectionsToEnhance.size,
+      result,
+      planPayload,
+      planApproved,
+    ]
   );
 
   const goNext = () => setStep((s) => (s < 5 ? ((s + 1) as Step) : s));
@@ -1185,8 +1332,8 @@ export function EnhanceResume({
               })}
             </div>
             <p className="text-[10px] text-gray-400 mt-1.5 leading-snug">
-              Click a penalty to remove it from the score. Useful if, say, a "years"
-              requirement is overly strict but you're otherwise a strong fit.
+              Click a penalty to remove it from the score. Useful if, say, a &ldquo;years&rdquo;
+              requirement is overly strict but you&apos;re otherwise a strong fit.
             </p>
           </div>
         )}
@@ -1224,8 +1371,215 @@ export function EnhanceResume({
             </div>
           </div>
         )}
+
+        {/* Pass 1 plan review — CRITICAL UX per the two-pass architecture.
+            The user MUST see this before any generation happens. */}
+        {renderPlanReviewBlock()}
       </CardContent>
     </Card>
+  );
+
+  const renderPlanReviewBlock = () => (
+    <div className="rounded-lg border border-blue-200 bg-blue-50/30 p-4 space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-blue-600" />
+          <p className="text-sm font-semibold text-blue-900">
+            AI Enhancement Plan
+          </p>
+          {planPayload && (
+            <Badge
+              variant={planApproved ? "success" : "info"}
+              className="text-[10px]"
+            >
+              {planApproved
+                ? "Approved"
+                : planPayload.plan.producedBy === "llm"
+                  ? "Ready for review"
+                  : "Built deterministically"}
+            </Badge>
+          )}
+        </div>
+        {!planLoading && (
+          <button
+            type="button"
+            onClick={fetchPlan}
+            className="text-[11px] text-blue-700 hover:text-blue-800"
+          >
+            {planPayload ? "Regenerate plan" : "Analyze JD + resume"}
+          </button>
+        )}
+      </div>
+
+      {planError && (
+        <div className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-md p-2">
+          {planError}
+        </div>
+      )}
+
+      {planLoading ? (
+        <div className="flex items-center gap-2 text-[11px] text-blue-800">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Running Pass 1 analysis...
+        </div>
+      ) : !planPayload ? (
+        <p className="text-[11px] text-blue-800">
+          Click &ldquo;Analyze JD + resume&rdquo; to see what the system
+          plans to change before generating anything.
+        </p>
+      ) : (
+        <div className="space-y-2.5 text-[11px] text-blue-900">
+          <p className="italic text-blue-800">
+            {planPayload.plan.summaryForUser}
+          </p>
+
+          {/* Target role interpretation */}
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-blue-700 mb-1">
+              Target role
+            </p>
+            <p>
+              <span className="font-semibold">
+                {planPayload.plan.targetRoleInterpretation.primaryRole}
+              </span>
+              {planPayload.plan.targetRoleInterpretation.seniority && (
+                <span className="text-blue-700">
+                  {" "}· {planPayload.plan.targetRoleInterpretation.seniority}
+                </span>
+              )}
+              {planPayload.plan.targetRoleInterpretation.roleFamily && (
+                <span className="text-blue-700">
+                  {" "}· {planPayload.plan.targetRoleInterpretation.roleFamily}
+                </span>
+              )}
+            </p>
+          </div>
+
+          {/* Section plan */}
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-blue-700 mb-1">
+              Section plan
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {Object.entries(planPayload.plan.sectionPlan).map(([k, v]) => (
+                <span
+                  key={k}
+                  className={cn(
+                    "rounded-md border px-1.5 py-0.5 text-[10px] capitalize",
+                    v === "keep"
+                      ? "border-gray-200 bg-white text-gray-600"
+                      : v === "light"
+                        ? "border-blue-200 bg-white text-blue-700"
+                        : "border-emerald-200 bg-white text-emerald-700"
+                  )}
+                >
+                  {k}: {v}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          {/* What should change */}
+          {(planPayload.plan.whatShouldChange.summary.length > 0 ||
+            planPayload.plan.whatShouldChange.skills.length > 0 ||
+            planPayload.plan.whatShouldChange.experience.length > 0) && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-blue-700 mb-1">
+                What should change
+              </p>
+              <ul className="space-y-0.5 leading-relaxed">
+                {[
+                  ...planPayload.plan.whatShouldChange.summary.map((s) => `Summary: ${s}`),
+                  ...planPayload.plan.whatShouldChange.skills.map((s) => `Skills: ${s}`),
+                  ...planPayload.plan.whatShouldChange.experience.map((s) => `Experience: ${s}`),
+                ].slice(0, 8).map((line, i) => (
+                  <li key={i}>· {line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Keyword additions */}
+          {planPayload.plan.whatShouldChange.keywordAdditions.length > 0 && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-blue-700 mb-1">
+                Keywords to weave in (truthfully)
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {planPayload.plan.whatShouldChange.keywordAdditions.map((k) => (
+                  <span
+                    key={k}
+                    className="rounded-md border border-blue-200 bg-white px-1.5 py-0.5 text-[10px] text-blue-800"
+                  >
+                    {k}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Protected fields */}
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-blue-700 mb-1">
+              Protected — never changed
+            </p>
+            <p className="text-blue-800">
+              {planPayload.plan.whatMustNotChange.protectedFields
+                .slice(0, 6)
+                .join(", ")}
+            </p>
+          </div>
+
+          {/* Risks */}
+          {planPayload.plan.risks.length > 0 && (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-amber-700 mb-1">
+                Risks / non-fixable gaps
+              </p>
+              <ul className="space-y-0.5 text-amber-900">
+                {planPayload.plan.risks.slice(0, 4).map((r, i) => (
+                  <li key={i}>· {r}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Expected lift */}
+          <div className="flex items-center justify-between text-[11px] text-blue-800">
+            <span>
+              Expected lift: <strong>+{planPayload.plan.expectedScoreImprovements.likelyGainPoints}</strong> points
+            </span>
+            <span>
+              Ceiling: <strong>{planPayload.plan.expectedScoreImprovements.ceiling}/100</strong>
+            </span>
+          </div>
+
+          {/* Approve CTA */}
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-blue-200/60">
+            <p className="text-[10px] text-blue-700 leading-snug">
+              Review the plan, then approve to unlock Pass 2 (final
+              generation). You can still tune rules on the next step.
+            </p>
+            <Button
+              variant={planApproved ? "outline" : "primary"}
+              size="sm"
+              className="h-8 shrink-0"
+              onClick={() => setPlanApproved(true)}
+              disabled={planApproved}
+            >
+              {planApproved ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+                  Plan approved
+                </>
+              ) : (
+                "Approve plan"
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 
   // Step 4 — Sections only.
@@ -1646,6 +2000,44 @@ export function EnhanceResume({
     }
     return (
       <div className="space-y-4">
+        {/* Validation banner — protected fields check + auto-fix notice. */}
+        {result.validation && result.validation.issues.length > 0 && (
+          <div
+            className={cn(
+              "flex items-start gap-2 p-3 rounded-lg border text-[11px]",
+              result.validation.ok
+                ? "border-amber-200 bg-amber-50 text-amber-900"
+                : "border-red-200 bg-red-50 text-red-900"
+            )}
+          >
+            <AlertCircle
+              className={cn(
+                "w-3.5 h-3.5 mt-0.5 shrink-0",
+                result.validation.ok ? "text-amber-600" : "text-red-600"
+              )}
+            />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold">
+                {result.validation.ok
+                  ? `Post-generation validation: ${result.validation.autoFixedSections.length} section(s) auto-reverted`
+                  : "Validation found issues in the generated output"}
+              </p>
+              <ul className="mt-1 space-y-0.5 opacity-90">
+                {result.validation.issues.slice(0, 4).map((iss, i) => (
+                  <li key={i} className="leading-snug">
+                    <span className="font-medium">{iss.field}</span>: {iss.message}
+                  </li>
+                ))}
+                {result.validation.issues.length > 4 && (
+                  <li className="text-[10px] opacity-70">
+                    +{result.validation.issues.length - 4} more
+                  </li>
+                )}
+              </ul>
+            </div>
+          </div>
+        )}
+
         {/* Engine / provider status — loud and unambiguous: green for LLM success,
              amber for fallback (with the exact failure reason), neutral otherwise. */}
         {result.engine && (() => {

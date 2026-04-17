@@ -41,6 +41,18 @@ export interface LlmEnhanceOptions {
   headerRole?: string;
   sectionsToEnhance: SectionKind[];
   rules: LlmEnhanceRules;
+  /**
+   * Pass 1 plan — when provided the prompt becomes Pass 2, following the
+   * plan's section depths / rules verbatim. Passing it is what triggers
+   * the strict two-pass architecture.
+   */
+  plan?: unknown;
+  /**
+   * The AI context packet that was used for planning. Passing it
+   * alongside the plan lets Pass 2 echo locked fields and the JD
+   * analysis so the model never forgets them.
+   */
+  context?: unknown;
 }
 
 export interface LlmEnhanceResult {
@@ -216,8 +228,30 @@ function buildUserPrompt(args: {
       : "",
   ].filter(Boolean);
 
+  // If the caller passed a Pass 1 plan, this call is Pass 2 — the prompt
+  // includes the approved plan and the packet of locked / analysed facts
+  // so the model generates strictly within the constraints the user
+  // already reviewed.
+  const planBlock = options.plan
+    ? [
+        "",
+        "APPROVED_PLAN (from Pass 1 — obey this verbatim):",
+        JSON.stringify(options.plan, null, 2),
+      ]
+    : [];
+
+  const contextBlock = options.context
+    ? [
+        "",
+        "AI_CONTEXT_PACKET (ground truth — do not invent anything not present here):",
+        JSON.stringify(options.context, null, 2),
+      ]
+    : [];
+
   return [
-    "Enhance the following resume for the target job. Only modify the sections listed under SECTIONS_TO_ENHANCE. Return a strict JSON object per the schema in the system prompt.",
+    options.plan
+      ? "This is PASS 2 of a two-pass workflow. The plan below has already been reviewed and approved by the user. Apply it exactly. Return the enhanced sections as strict JSON per the schema in the system prompt."
+      : "Enhance the following resume for the target job. Only modify the sections listed under SECTIONS_TO_ENHANCE. Return a strict JSON object per the schema in the system prompt.",
     "",
     "JOB_DESCRIPTION:",
     options.jobDescription.slice(0, 8000),
@@ -226,6 +260,8 @@ function buildUserPrompt(args: {
     ...ruleLines,
     "",
     `SECTIONS_TO_ENHANCE: ${JSON.stringify(sectionsToEnhance)}`,
+    ...planBlock,
+    ...contextBlock,
     "",
     "CURRENT_RESUME (JSON):",
     JSON.stringify({ sections: resume }, null, 2),

@@ -91,20 +91,85 @@ export async function POST(req: Request) {
     const provider = await getActiveProviderForUser(userId!);
     const canLlm = !!provider && (provider.kind === "openai" || provider.kind === "anthropic");
 
-    // Try LLM for cover letters first; fall back to deterministic on error.
+    // Two-pass cover-letter generation:
+    //   Pass 1: extract themes + tone + positioning (JSON only, no prose).
+    //   Pass 2: draft the letter, constrained by Pass 1.
+    //
+    // Falls back to the deterministic template whenever any pass fails.
+    interface CoverLetterPlan {
+      themes: string[];
+      tone: string;
+      positioning: string;
+      toolsToMention: string[];
+      achievementsToReference: string[];
+    }
+    const runCoverLetterPass1 = async (): Promise<CoverLetterPlan | null> => {
+      if (!canLlm) return null;
+      log(`cover letter pass 1 (analysis) via ${provider!.name}`);
+      const res = await callLLM(provider!, {
+        systemPrompt:
+          "You are a senior recruiter-brief analyst. Read the job description + candidate resume and output a strict JSON object describing the top themes, tone, positioning, tools to mention, and achievements to reference in an upcoming cover letter. No prose. Schema: {\"themes\":string[],\"tone\":string,\"positioning\":string,\"toolsToMention\":string[],\"achievementsToReference\":string[]}",
+        userPrompt: [
+          `TARGET ROLE: ${ctx.role}`,
+          `TARGET COMPANY: ${ctx.company}`,
+          `SELF-DESCRIPTION: ${ctx.headerRole}`,
+          "",
+          "JOB_DESCRIPTION:",
+          ctx.jobDescription.slice(0, 6000),
+          "",
+          ctx.enhancedResumeText
+            ? `ENHANCED RESUME (source of truth — do not invent):\n${ctx.enhancedResumeText.slice(0, 4000)}`
+            : ctx.summary
+              ? `CANDIDATE SUMMARY: ${ctx.summary}`
+              : "",
+          "",
+          "Return ONLY the JSON.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        temperature: 0.2,
+        maxTokens: 600,
+        json: true,
+        onLog: log,
+      });
+      if (!res.ok) return null;
+      try {
+        const data = JSON.parse(res.text);
+        return {
+          themes: Array.isArray(data.themes) ? data.themes.slice(0, 5) : [],
+          tone: typeof data.tone === "string" ? data.tone : "professional",
+          positioning:
+            typeof data.positioning === "string" ? data.positioning : "",
+          toolsToMention: Array.isArray(data.toolsToMention)
+            ? data.toolsToMention.slice(0, 6)
+            : [],
+          achievementsToReference: Array.isArray(data.achievementsToReference)
+            ? data.achievementsToReference.slice(0, 4)
+            : [],
+        };
+      } catch {
+        return null;
+      }
+    };
+
     const generateCoverLetterText = async (): Promise<{
       content: string;
       engineKind: "llm" | "llm-fallback" | "deterministic";
       fallbackReason?: string;
+      plan?: CoverLetterPlan | null;
     }> => {
       if (!canLlm) {
         return { content: generateCoverLetter(ctx), engineKind: "deterministic" };
       }
-      log(`cover letter via ${provider!.name} (${provider!.model})`);
+
+      const plan = await runCoverLetterPass1();
+      if (plan) log(`cover letter pass 1 ok — themes=${plan.themes.length}`);
+
+      log(`cover letter pass 2 (generation) via ${provider!.name} (${provider!.model})`);
       const res = await callLLM(provider!, {
         systemPrompt:
-          "You are a professional writer drafting a concise, tailored cover letter. Output plain text only. Tone: confident but not arrogant. 3–4 short paragraphs. 250–350 words. Do NOT repeat the candidate's contact block — the client already handles that. Do NOT invent facts.",
-        userPrompt: buildCoverLetterPrompt(ctx),
+          "You are a professional writer drafting a concise, tailored cover letter. Output plain text only. Tone: confident but not arrogant. 3–4 short paragraphs. 250–350 words. Do NOT repeat the candidate's contact block — the client already handles that. Do NOT invent facts. Obey the provided PLAN verbatim.",
+        userPrompt: buildCoverLetterPrompt(ctx, plan),
         temperature: 0.5,
         maxTokens: 900,
         onLog: log,
@@ -114,11 +179,13 @@ export async function POST(req: Request) {
           content: generateCoverLetter(ctx),
           engineKind: "llm-fallback",
           fallbackReason: res.reason,
+          plan,
         };
       }
       return {
         content: composeCoverLetter(ctx, res.text.trim()),
         engineKind: "llm",
+        plan,
       };
     };
 
@@ -190,7 +257,16 @@ export async function POST(req: Request) {
   }
 }
 
-function buildCoverLetterPrompt(ctx: GenerationContext): string {
+function buildCoverLetterPrompt(
+  ctx: GenerationContext,
+  plan?: {
+    themes: string[];
+    tone: string;
+    positioning: string;
+    toolsToMention: string[];
+    achievementsToReference: string[];
+  } | null
+): string {
   const parts = [
     `Write a cover letter for the candidate applying to the ${ctx.role} position at ${ctx.company}.`,
     `Use "${ctx.headerRole}" as the self-description in the opening (i.e., the candidate positions themselves as a ${ctx.headerRole}). The cover letter MUST be consistent with the resume — same role language, same tools mentioned, same companies, no contradictions.`,
@@ -198,6 +274,14 @@ function buildCoverLetterPrompt(ctx: GenerationContext): string {
     `CANDIDATE NAME: ${ctx.name}`,
     ctx.summary ? `CANDIDATE SUMMARY (facts — do not invent): ${ctx.summary}` : "",
   ];
+
+  if (plan) {
+    parts.push(
+      "",
+      "PASS 1 PLAN — obey verbatim:",
+      JSON.stringify(plan, null, 2)
+    );
+  }
 
   if (ctx.enhancedResumeText) {
     parts.push(
