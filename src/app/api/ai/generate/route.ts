@@ -1,14 +1,42 @@
 import { NextResponse } from "next/server";
 import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
+import { callLLM, getActiveProviderForUser } from "@/lib/llm-provider";
 
 export async function POST(req: Request) {
+  const logs: string[] = [];
+  const log = (msg: string) => {
+    console.log(`[generate] ${msg}`);
+    logs.push(msg);
+  };
+
   try {
     const { error, userId } = await authenticateRequest();
     if (error) return error;
 
     const body = await req.json();
-    const { jobDescription, role, company, baseResumeId, type } = body;
+    const {
+      jobDescription,
+      role,
+      company,
+      baseResumeId,
+      type,
+      headerRole,
+      enhancedResumeText,
+    } = body as {
+      jobDescription: string;
+      role: string;
+      company: string;
+      baseResumeId?: string | null;
+      type?: string;
+      headerRole?: string;
+      /**
+       * Optional — the enhanced resume text for this application. When
+       * provided, cover letters are tightly grounded in this content so
+       * they describe the same achievements the resume does.
+       */
+      enhancedResumeText?: string;
+    };
 
     if (!jobDescription || !role || !company) {
       return NextResponse.json(
@@ -16,12 +44,6 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-
-    // Check for active AI provider (used when external API integration is available)
-    const activeProvider = await prisma.aIProvider.findFirst({
-      where: { userId: userId!, isActive: true },
-      select: { id: true, name: true, model: true },
-    });
 
     if (jobDescription.length > 15000) {
       return NextResponse.json(
@@ -57,29 +79,174 @@ export async function POST(req: Request) {
       resumeName,
       resumeCategory,
       role: role.trim(),
+      headerRole: (headerRole || role || "").trim(),
       company: company.trim(),
       jobDescription: jobDescription.trim(),
+      enhancedResumeText:
+        typeof enhancedResumeText === "string"
+          ? enhancedResumeText.slice(0, 8000)
+          : "",
+    };
+
+    const provider = await getActiveProviderForUser(userId!);
+    const canLlm = !!provider && (provider.kind === "openai" || provider.kind === "anthropic");
+
+    // Two-pass cover-letter generation:
+    //   Pass 1: extract themes + tone + positioning (JSON only, no prose).
+    //   Pass 2: draft the letter, constrained by Pass 1.
+    //
+    // Falls back to the deterministic template whenever any pass fails.
+    interface CoverLetterPlan {
+      themes: string[];
+      tone: string;
+      positioning: string;
+      toolsToMention: string[];
+      achievementsToReference: string[];
+    }
+    const runCoverLetterPass1 = async (): Promise<CoverLetterPlan | null> => {
+      if (!canLlm) return null;
+      log(`cover letter pass 1 (analysis) via ${provider!.name}`);
+      const res = await callLLM(provider!, {
+        systemPrompt:
+          "You are a senior recruiter-brief analyst. Read the job description + candidate resume and output a strict JSON object describing the top themes, tone, positioning, tools to mention, and achievements to reference in an upcoming cover letter. No prose. Schema: {\"themes\":string[],\"tone\":string,\"positioning\":string,\"toolsToMention\":string[],\"achievementsToReference\":string[]}",
+        userPrompt: [
+          `TARGET ROLE: ${ctx.role}`,
+          `TARGET COMPANY: ${ctx.company}`,
+          `SELF-DESCRIPTION: ${ctx.headerRole}`,
+          "",
+          "JOB_DESCRIPTION:",
+          ctx.jobDescription.slice(0, 6000),
+          "",
+          ctx.enhancedResumeText
+            ? `ENHANCED RESUME (source of truth — do not invent):\n${ctx.enhancedResumeText.slice(0, 4000)}`
+            : ctx.summary
+              ? `CANDIDATE SUMMARY: ${ctx.summary}`
+              : "",
+          "",
+          "Return ONLY the JSON.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        temperature: 0.2,
+        maxTokens: 600,
+        json: true,
+        onLog: log,
+      });
+      if (!res.ok) return null;
+      try {
+        const data = JSON.parse(res.text);
+        return {
+          themes: Array.isArray(data.themes) ? data.themes.slice(0, 5) : [],
+          tone: typeof data.tone === "string" ? data.tone : "professional",
+          positioning:
+            typeof data.positioning === "string" ? data.positioning : "",
+          toolsToMention: Array.isArray(data.toolsToMention)
+            ? data.toolsToMention.slice(0, 6)
+            : [],
+          achievementsToReference: Array.isArray(data.achievementsToReference)
+            ? data.achievementsToReference.slice(0, 4)
+            : [],
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const generateCoverLetterText = async (): Promise<{
+      content: string;
+      engineKind: "llm" | "llm-fallback" | "deterministic";
+      fallbackReason?: string;
+      plan?: CoverLetterPlan | null;
+    }> => {
+      if (!canLlm) {
+        return { content: generateCoverLetter(ctx), engineKind: "deterministic" };
+      }
+
+      const plan = await runCoverLetterPass1();
+      if (plan) log(`cover letter pass 1 ok — themes=${plan.themes.length}`);
+
+      log(`cover letter pass 2 (generation) via ${provider!.name} (${provider!.model})`);
+      const res = await callLLM(provider!, {
+        systemPrompt:
+          "You are a professional writer drafting a concise, tailored cover letter. Output plain text only. Tone: confident but not arrogant. 3–4 short paragraphs. 250–350 words. Do NOT repeat the candidate's contact block — the client already handles that. Do NOT invent facts. Obey the provided PLAN verbatim.",
+        userPrompt: buildCoverLetterPrompt(ctx, plan),
+        temperature: 0.5,
+        maxTokens: 900,
+        onLog: log,
+      });
+      if (!res.ok) {
+        return {
+          content: generateCoverLetter(ctx),
+          engineKind: "llm-fallback",
+          fallbackReason: res.reason,
+          plan,
+        };
+      }
+      return {
+        content: composeCoverLetter(ctx, res.text.trim()),
+        engineKind: "llm",
+        plan,
+      };
     };
 
     if (type === "resume") {
       return NextResponse.json({
         content: generateTailoredResume(ctx),
         type: "resume",
+        engine: {
+          kind: "deterministic",
+          label: "Built-in template",
+          providerConfigured: !!provider,
+          providerName: provider?.name || null,
+          providerModel: provider?.model || null,
+          logs,
+        },
       });
     }
 
     if (type === "cover_letter") {
+      const { content, engineKind, fallbackReason } = await generateCoverLetterText();
       return NextResponse.json({
-        content: generateCoverLetter(ctx),
+        content,
         type: "cover_letter",
+        engine: {
+          kind: engineKind,
+          label:
+            engineKind === "llm"
+              ? `LLM (${provider!.name}${provider!.model ? ` · ${provider!.model}` : ""})`
+              : engineKind === "llm-fallback"
+                ? "LLM failed — template fallback"
+                : "Built-in template",
+          providerConfigured: !!provider,
+          providerName: provider?.name || null,
+          providerModel: provider?.model || null,
+          fallbackReason,
+          logs,
+        },
       });
     }
 
+    const { content: coverLetterContent, engineKind: clEngine, fallbackReason } =
+      await generateCoverLetterText();
+
     return NextResponse.json({
       resume: generateTailoredResume(ctx),
-      coverLetter: generateCoverLetter(ctx),
+      coverLetter: coverLetterContent,
       type: "both",
-      provider: activeProvider ? { name: activeProvider.name, model: activeProvider.model } : null,
+      engine: {
+        kind: clEngine,
+        label:
+          clEngine === "llm"
+            ? `LLM (${provider!.name}${provider!.model ? ` · ${provider!.model}` : ""})`
+            : clEngine === "llm-fallback"
+              ? "LLM failed — template fallback"
+              : "Built-in template",
+        providerConfigured: !!provider,
+        providerName: provider?.name || null,
+        providerModel: provider?.model || null,
+        fallbackReason,
+        logs,
+      },
     });
   } catch (err) {
     console.error("AI generate error:", err);
@@ -88,6 +255,84 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+function buildCoverLetterPrompt(
+  ctx: GenerationContext,
+  plan?: {
+    themes: string[];
+    tone: string;
+    positioning: string;
+    toolsToMention: string[];
+    achievementsToReference: string[];
+  } | null
+): string {
+  const parts = [
+    `Write a cover letter for the candidate applying to the ${ctx.role} position at ${ctx.company}.`,
+    `Use "${ctx.headerRole}" as the self-description in the opening (i.e., the candidate positions themselves as a ${ctx.headerRole}). The cover letter MUST be consistent with the resume — same role language, same tools mentioned, same companies, no contradictions.`,
+    "",
+    `CANDIDATE NAME: ${ctx.name}`,
+    ctx.summary ? `CANDIDATE SUMMARY (facts — do not invent): ${ctx.summary}` : "",
+  ];
+
+  if (plan) {
+    parts.push(
+      "",
+      "PASS 1 PLAN — obey verbatim:",
+      JSON.stringify(plan, null, 2)
+    );
+  }
+
+  if (ctx.enhancedResumeText) {
+    parts.push(
+      "",
+      "ENHANCED RESUME (use this as the source of truth for specific achievements, tools, and companies — do NOT contradict it):",
+      ctx.enhancedResumeText.slice(0, 6000)
+    );
+  }
+
+  parts.push(
+    "",
+    "JOB DESCRIPTION:",
+    ctx.jobDescription.slice(0, 6000),
+    "",
+    "Requirements:",
+    `- Address "Dear Hiring Manager," unless a named recipient is in the JD.`,
+    `- Explicitly mention both the role name (${ctx.role}) and the company name (${ctx.company}).`,
+    `- Reflect the header role (${ctx.headerRole}) consistently.`,
+    "- Reference 2–3 concrete achievements or tools that appear in the resume (not generic filler).",
+    "- 3–4 short paragraphs, 250–350 words.",
+    `- Sign off with "Sincerely,\\n${ctx.name}".`,
+    "- No contact block at the top (client adds it).",
+    "- Plain text, no markdown."
+  );
+
+  return parts.filter(Boolean).join("\n");
+}
+
+/**
+ * Compose the final cover letter text: contact block (client-owned) +
+ * LLM-generated body. Keeps layout identical to the deterministic version.
+ */
+function composeCoverLetter(ctx: GenerationContext, body: string): string {
+  const today = new Date().toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+  const lines: string[] = [];
+  lines.push(ctx.name);
+  if (ctx.location) lines.push(ctx.location);
+  if (ctx.email) lines.push(ctx.email);
+  if (ctx.phone) lines.push(ctx.phone);
+  lines.push("");
+  lines.push(today);
+  lines.push("");
+  lines.push("Hiring Manager");
+  lines.push(ctx.company);
+  lines.push("");
+  lines.push(body.trim());
+  return lines.join("\n");
 }
 
 // ── types ──
@@ -102,8 +347,10 @@ interface GenerationContext {
   resumeName: string;
   resumeCategory: string;
   role: string;
+  headerRole: string;
   company: string;
   jobDescription: string;
+  enhancedResumeText: string;
 }
 
 // ── resume generator ──
@@ -220,9 +467,11 @@ function generateCoverLetter(ctx: GenerationContext): string {
   lines.push(`Dear Hiring Manager,`);
   lines.push("");
 
-  // Opening
+  // Opening — uses headerRole as the self-description so the cover letter
+  // stays consistent with the resume header.
+  const selfRole = ctx.headerRole || ctx.role;
   lines.push(
-    `I am writing to express my enthusiastic interest in the ${ctx.role} position at ${ctx.company}. With extensive experience in ${topSkills.slice(0, 3).join(", ").toLowerCase()}, I am confident in my ability to make an immediate and meaningful impact on your team.`
+    `As a ${selfRole}, I am writing to express my enthusiastic interest in the ${ctx.role} position at ${ctx.company}. With extensive experience in ${topSkills.slice(0, 3).join(", ").toLowerCase()}, I am confident in my ability to make an immediate and meaningful impact on your team.`
   );
   lines.push("");
 

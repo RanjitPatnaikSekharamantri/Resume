@@ -30,14 +30,31 @@ const BASE_EMPHASIZE_TOKENS = [
   "Tableau", "Power BI", "Snowflake", "Databricks", "Airflow",
 ];
 
+/**
+ * Canonical headings accepted at render time. Include the colon variants
+ * to match `CANONICAL_SECTION_TITLES` in docx-engine, and also the bare
+ * variants so older text exports still render correctly.
+ */
 const CANONICAL_HEADINGS = new Set([
   "PROFILE SUMMARY",
+  "PROFILE SUMMARY:",
   "TECHNICAL SKILLS",
+  "TECHNICAL SKILLS:",
   "WORK EXPERIENCE",
+  "WORK EXPERIENCE:",
   "EDUCATION",
+  "EDUCATION:",
   "CERTIFICATIONS",
+  "CERTIFICATIONS:",
   "PROJECTS",
+  "PROJECTS:",
 ]);
+
+function normalizeCanonicalHeading(raw: string): string {
+  const upper = raw.toUpperCase();
+  // Strip trailing colon for lookup, then re-add for canonical display.
+  return upper.replace(/:$/, "");
+}
 
 function escapeRegex(s: string) {
   return s.replace(/[.+*?^${}()|[\]\\]/g, "\\$&");
@@ -160,9 +177,12 @@ export async function buildPdf(
 
       const upper = trimmed.toUpperCase();
       if (CANONICAL_HEADINGS.has(upper)) {
-        currentSection = headingToKind[upper] || "other";
+        const bare = normalizeCanonicalHeading(upper);
+        currentSection = headingToKind[bare] || "other";
         doc.moveDown(0.5);
-        doc.fontSize(11).font("Helvetica-Bold").fillColor("#000").text(upper);
+        // Always render with trailing colon for consistency with the DOCX
+        // output and the reference base-resume pattern.
+        doc.fontSize(11).font("Helvetica-Bold").fillColor("#000").text(`${bare}:`);
         doc.moveDown(0.15);
         continue;
       }

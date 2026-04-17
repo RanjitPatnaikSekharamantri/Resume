@@ -3,7 +3,7 @@ import { authenticateRequest } from "@/lib/api-auth";
 import { prisma } from "@/lib/prisma";
 import { getSignedDownloadUrl } from "@/lib/supabase";
 import { parseDocx, sectionsToText } from "@/lib/docx-engine";
-import { calculateMatchScore } from "@/lib/match-scoring";
+import { calculateAtsScore } from "@/lib/ats-scoring";
 import { recommendRules } from "@/lib/rule-recommender";
 
 /**
@@ -21,7 +21,21 @@ export async function POST(req: Request) {
     if (error) return error;
 
     const body = await req.json();
-    const { resumeId, jobDescription, resumeText: providedText } = body;
+    const {
+      resumeId,
+      jobDescription,
+      resumeText: providedText,
+      mode,
+      ignorePenalties,
+    } = body as {
+      resumeId?: string;
+      jobDescription: string;
+      resumeText?: string;
+      mode?: "strict" | "realistic" | "bestfit";
+      ignorePenalties?: Array<
+        "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain"
+      >;
+    };
 
     if (!jobDescription) {
       return NextResponse.json(
@@ -66,17 +80,32 @@ export async function POST(req: Request) {
         .join(" ");
     }
 
-    const score = resumeText
-      ? calculateMatchScore({ jobDescription, resumeText })
+    const ats = resumeText
+      ? calculateAtsScore({
+          jobDescription,
+          resumeText,
+          mode,
+          ignorePenalties,
+        })
+      : null;
+
+    const legacyScore = ats
+      ? {
+          overallScore: ats.overall,
+          skillsMatch: ats.legacyBreakdown.skillsMatch,
+          experienceMatch: ats.legacyBreakdown.experienceMatch,
+          keywordCoverage: ats.legacyBreakdown.keywordCoverage,
+          domainMatch: ats.legacyBreakdown.domainMatch,
+        }
       : null;
 
     const recommendation = recommendRules({
       jobDescription,
       resumeText,
-      score,
+      score: legacyScore,
     });
 
-    return NextResponse.json({ score, recommendation });
+    return NextResponse.json({ score: legacyScore, ats, recommendation });
   } catch (err) {
     console.error("Recommend rules error:", err);
     return NextResponse.json(

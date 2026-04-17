@@ -110,7 +110,7 @@ export default function DashboardPage() {
         title="Command Center"
         description="Your job search at a glance"
         action={
-          <Link href="/applications">
+          <Link href="/applications?new=1">
             <Button variant="primary" size="sm">
               <Plus className="w-4 h-4 mr-2" />
               New Application
@@ -280,14 +280,11 @@ export default function DashboardPage() {
               <CardTitle className="text-sm font-semibold">Quick Actions</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              <Link href="/applications" className="block">
+              <Link href="/applications?new=1" className="block">
                 <QuickAction icon={<Plus className="w-4 h-4" />} label="New Application" desc="Track a new job" />
               </Link>
               <Link href="/ai-studio" className="block">
-                <QuickAction icon={<Sparkles className="w-4 h-4" />} label="Generate Documents" desc="Resume + cover letter" />
-              </Link>
-              <Link href="/ai-studio?mode=enhance" className="block">
-                <QuickAction icon={<Wrench className="w-4 h-4" />} label="Enhance Resume" desc="Tailor existing DOCX" />
+                <QuickAction icon={<Sparkles className="w-4 h-4" />} label="Tailor / Enhance Resume" desc="Match a base resume to a JD" />
               </Link>
               <Link href="/resume-library" className="block">
                 <QuickAction icon={<FileText className="w-4 h-4" />} label="Upload Resume" desc="Add to your library" />

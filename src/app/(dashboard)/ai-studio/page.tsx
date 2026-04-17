@@ -98,11 +98,17 @@ export default function AIStudioPage() {
   const prefillJd = searchParams.get("jd") || "";
   const prefillResumeId = searchParams.get("resumeId") || "";
   const prefillAppId = searchParams.get("applicationId") || "";
+  // The "Generate from scratch" flow creates more confusion than value for
+  // the core use case (tailor an existing base resume), so we hide it
+  // behind an advanced flag. ?advanced=1 unlocks it; everything else sees
+  // the Enhance flow only.
+  const advancedMode = searchParams.get("advanced") === "1";
   const prefillMode = searchParams.get("mode");
 
-  // Top-level mode
+  // Top-level mode — always "enhance" unless the user explicitly opted in
+  // to the hidden generate-from-scratch flow via ?advanced=1&mode=generate.
   const [studioMode, setStudioMode] = useState<StudioMode>(
-    prefillMode === "enhance" ? "enhance" : "generate"
+    advancedMode && prefillMode === "generate" ? "generate" : "enhance"
   );
 
   // Input state — prefilled from the application context when available
@@ -378,9 +384,9 @@ export default function AIStudioPage() {
     <>
       <PageHeader
         title="AI Studio"
-        description="Generate tailored resumes and cover letters from job descriptions"
+        description="Tailor a base resume to a specific job description"
         action={
-          studioMode === "generate" && hasOutput ? (
+          studioMode === "generate" && hasOutput && advancedMode ? (
             <Button variant="outline" size="sm" onClick={handleReset}>
               <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
               New Session
@@ -389,31 +395,34 @@ export default function AIStudioPage() {
         }
       />
 
-      {/* Mode toggle */}
-      <div className="flex items-center gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
-        <button
-          onClick={() => setStudioMode("generate")}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-            studioMode === "generate"
-              ? "bg-white shadow-sm text-gray-900"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Wand2 className="w-3.5 h-3.5" />
-          Generate
-        </button>
-        <button
-          onClick={() => setStudioMode("enhance")}
-          className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-            studioMode === "enhance"
-              ? "bg-white shadow-sm text-gray-900"
-              : "text-gray-500 hover:text-gray-700"
-          }`}
-        >
-          <Wrench className="w-3.5 h-3.5" />
-          Enhance Resume
-        </button>
-      </div>
+      {/* Mode toggle — only shown in advanced mode. Everyone else stays on
+          Enhance, which is the primary product surface. */}
+      {advancedMode && (
+        <div className="flex items-center gap-1 mb-6 bg-gray-100 rounded-lg p-1 w-fit">
+          <button
+            onClick={() => setStudioMode("enhance")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+              studioMode === "enhance"
+                ? "bg-white shadow-sm text-gray-900"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            Enhance Resume
+          </button>
+          <button
+            onClick={() => setStudioMode("generate")}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+              studioMode === "generate"
+                ? "bg-white shadow-sm text-gray-900"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            <Wand2 className="w-3.5 h-3.5" />
+            Generate (advanced)
+          </button>
+        </div>
+      )}
 
       {/* In-context banner when launched from an application */}
       {prefillAppId && (
