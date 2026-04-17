@@ -283,18 +283,22 @@ export default function ProfilePage() {
   // answers, salary, preferred location) are intentionally excluded so the
   // bar doesn't mislead users into thinking they're incomplete when they're
   // not.
-  const REQUIRED_FIELDS: (string | undefined | null)[] = [
-    name,
-    profile.phone,
-    profile.location,
-    profile.summary,
-    profile.workAuthorization,
-    profile.preferredRole,
-    profile.remotePreference,
+  const REQUIRED_FIELDS: Array<{ label: string; value: string | undefined | null }> = [
+    { label: "Full Name", value: name },
+    { label: "Phone", value: profile.phone },
+    { label: "Location", value: profile.location },
+    { label: "Professional Summary", value: profile.summary },
+    { label: "Work Authorization", value: profile.workAuthorization },
+    { label: "Preferred Role", value: profile.preferredRole },
+    { label: "Remote Preference", value: profile.remotePreference },
   ];
-  const filledCount = REQUIRED_FIELDS.filter(
-    (v) => typeof v === "string" && v.trim().length > 0
-  ).length;
+  const filledFields = REQUIRED_FIELDS.filter(
+    (f) => typeof f.value === "string" && f.value.trim().length > 0
+  );
+  const missingFields = REQUIRED_FIELDS.filter(
+    (f) => !(typeof f.value === "string" && f.value.trim().length > 0)
+  );
+  const filledCount = filledFields.length;
   const totalFields = REQUIRED_FIELDS.length;
   const completeness = Math.round((filledCount / totalFields) * 100);
 
@@ -337,7 +341,7 @@ export default function ProfilePage() {
             )}
           </div>
         </div>
-        <div className="hidden sm:flex flex-col items-end gap-1">
+        <div className="hidden sm:flex flex-col items-end gap-1 relative group">
           <Badge variant={completeness === 100 ? "success" : "secondary"}>
             {completeness}% complete
           </Badge>
@@ -349,6 +353,30 @@ export default function ProfilePage() {
               style={{ width: `${completeness}%` }}
             />
           </div>
+          {/* Hover tooltip — breaks down exactly which required fields are
+              filled vs missing, so the percentage is never a black box. */}
+          {missingFields.length > 0 && (
+            <div className="absolute right-0 top-full mt-2 z-20 hidden group-hover:block w-64 rounded-lg border border-gray-200 bg-white shadow-lg p-3 text-xs">
+              <p className="font-semibold text-gray-900 mb-1">
+                {filledCount}/{totalFields} required fields
+              </p>
+              <p className="text-[11px] text-gray-500 mb-2">
+                Missing — fill these to reach 100%:
+              </p>
+              <ul className="space-y-0.5 text-[11px] text-gray-700">
+                {missingFields.map((f) => (
+                  <li key={f.label} className="flex items-center gap-1.5">
+                    <span className="w-1 h-1 rounded-full bg-amber-500" />
+                    {f.label}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[10px] text-gray-400 mt-2 leading-snug">
+                Optional fields (LinkedIn, GitHub, salary, equal-opportunity
+                answers) are intentionally excluded.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

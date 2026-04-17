@@ -122,17 +122,14 @@ const SECTION_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+type Step = 1 | 2 | 3 | 4 | 5;
 
 const STEP_LABELS: Record<Step, string> = {
   1: "Review",
-  2: "Role alignment",
-  3: "Score",
-  4: "Sections",
-  5: "Rules",
-  6: "Enhance",
-  7: "Compare",
-  8: "Save",
+  2: "Score & fixes",
+  3: "Options",
+  4: "Enhance",
+  5: "Compare & save",
 };
 
 type HeaderRoleMode = "application" | "original" | "custom" | "suggested";
@@ -226,6 +223,12 @@ export function EnhanceResume({
   const [rewriteIntensity, setRewriteIntensity] =
     useState<"light" | "moderate" | "aggressive">("moderate");
 
+  // Scoring mode — controls how strict the ATS engine is.
+  const [scoringMode, setScoringMode] =
+    useState<"strict" | "realistic" | "bestfit">("realistic");
+  type PenaltyBucket = "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain";
+  const [ignoredPenalties, setIgnoredPenalties] = useState<Set<PenaltyBucket>>(new Set());
+
   // Rule recommendations
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [recommendationDecision, setRecommendationDecision] =
@@ -295,7 +298,7 @@ export function EnhanceResume({
 
   // ── step 2: detect target role + suggest experience alignment ──
   useEffect(() => {
-    if (step !== 2 || !contextReady || detectedRoles) return;
+    if (step !== 1 || !contextReady || detectedRoles) return;
     let cancelled = false;
     setDetectingRoles(true);
     setDetectError("");
@@ -340,13 +343,20 @@ export function EnhanceResume({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, contextReady]);
 
+  // Reset the baseline score when scoring mode / ignored-penalty set
+  // changes so the UI never shows stale numbers.
+  useEffect(() => {
+    setBaselineScore(null);
+    setBaselineAts(null);
+  }, [scoringMode, ignoredPenalties]);
+
   // ── step 3: fetch baseline score ──
   //
   // Uses the same scoring engine as every other screen (see
   // /api/ai/match-score). The resume text comes from parsing the selected
   // base resume via /api/ai/recommend-rules which parses the DOCX.
   useEffect(() => {
-    if (step !== 3 || !contextReady || baselineScore) return;
+    if (step !== 2 || !contextReady || baselineScore) return;
     let cancelled = false;
     setBaselineLoading(true);
     fetch("/api/ai/recommend-rules", {
@@ -355,12 +365,15 @@ export function EnhanceResume({
       body: JSON.stringify({
         resumeId: selectedResume,
         jobDescription: jobDescription.trim(),
+        mode: scoringMode,
+        ignorePenalties: [...ignoredPenalties],
       }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data) return;
         if (data.score) setBaselineScore(data.score);
+        if (data.ats) setBaselineAts(data.ats);
         if (data.recommendation) setRecommendation(data.recommendation);
       })
       .finally(() => {
@@ -370,7 +383,7 @@ export function EnhanceResume({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, contextReady]);
+  }, [step, contextReady, scoringMode, ignoredPenalties]);
 
   // ── rule recommendations ──
 
@@ -382,6 +395,8 @@ export function EnhanceResume({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: scoringMode,
+          ignorePenalties: [...ignoredPenalties],
           resumeId: selectedResume,
           jobDescription: jobDescription.trim(),
         }),
@@ -482,6 +497,8 @@ export function EnhanceResume({
             prioritizeRecent,
             strongSummaryRewrite,
           },
+          scoringMode,
+          ignorePenalties: [...ignoredPenalties],
         }),
       });
 
@@ -505,7 +522,7 @@ export function EnhanceResume({
       if (data.scores?.enhancedAts) setAfterAts(data.scores.enhancedAts);
 
       onToast({ message: "Resume enhanced", variant: "success" });
-      setStep(7);
+      setStep(5);
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
@@ -620,59 +637,39 @@ export function EnhanceResume({
   //
   // 8-step wizard:
   //   1. Review         — context + base resume
-  //   2. Role Alignment — header role + per-role experience alignment
-  //   3. Score          — Base Resume Score
-  //   4. Sections       — which sections to enhance
-  //   5. Rules          — rule recommendations + manual overrides
-  //   6. Enhance        — run the enhancement
-  //   7. Compare        — Base vs Enhanced score + preview
-  //   8. Save           — save as ResumeVersion + download
+  //   2. Score & fixes  — Base Resume Score + quick suggestions
+  //   3. Options        — sections + intensity + rule recs
+  //   4. Enhance        — single primary CTA
+  //   5. Compare & save — before vs after + save as active + download
 
   const canAdvanceFrom = useCallback(
     (s: Step): boolean => {
       switch (s) {
         case 1:
-          return contextReady;
-        case 2:
-          // User must confirm the role alignment step — either accept the
-          // suggestions, pick "keep original", or pick manual.
           return (
-            rolesConfirmed &&
+            contextReady &&
             (headerRoleMode !== "custom" || customHeaderRole.trim().length > 0)
           );
-        case 3:
+        case 2:
           return true;
-        case 4:
+        case 3:
           return sectionsToEnhance.size > 0;
+        case 4:
+          return !!result;
         case 5:
-          return recommendation === null || recommendationDecision !== "pending";
-        case 6:
-          return !!result;
-        case 7:
-          return !!result;
-        case 8:
         default:
           return true;
       }
     },
-    [
-      contextReady,
-      rolesConfirmed,
-      headerRoleMode,
-      customHeaderRole,
-      sectionsToEnhance.size,
-      recommendation,
-      recommendationDecision,
-      result,
-    ]
+    [contextReady, headerRoleMode, customHeaderRole, sectionsToEnhance.size, result]
   );
 
-  const goNext = () => setStep((s) => (s < 8 ? ((s + 1) as Step) : s));
+  const goNext = () => setStep((s) => (s < 5 ? ((s + 1) as Step) : s));
   const goBack = () => setStep((s) => (s > 1 ? ((s - 1) as Step) : s));
 
   const stepper = (
     <div className="flex items-center gap-1 overflow-x-auto pb-1">
-      {([1, 2, 3, 4, 5, 6, 7, 8] as Step[]).map((s, idx) => (
+      {([1, 2, 3, 4, 5] as Step[]).map((s, idx) => (
         <React.Fragment key={s}>
           <button
             type="button"
@@ -711,7 +708,7 @@ export function EnhanceResume({
             </span>
             <span className="hidden sm:inline">{STEP_LABELS[s]}</span>
           </button>
-          {idx < 7 && <ArrowRight className="w-3 h-3 text-gray-300 shrink-0" />}
+          {idx < 4 && <ArrowRight className="w-3 h-3 text-gray-300 shrink-0" />}
         </React.Fragment>
       ))}
     </div>
@@ -792,24 +789,49 @@ export function EnhanceResume({
           </div>
         )}
 
-        {!contextReady && (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
-            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
-            <span>
-              Missing required context. Pick a base resume and make sure the
-              application has a role, company, and job description set.
-            </span>
-          </div>
-        )}
+        {!contextReady && (() => {
+          const missing: string[] = [];
+          if (!selectedResume) missing.push("base resume");
+          if (!role.trim()) missing.push("role");
+          if (!company.trim()) missing.push("company");
+          if (!jobDescription.trim()) missing.push("job description");
+          return (
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-amber-600" />
+                <div className="text-sm text-amber-900">
+                  <p className="font-semibold">
+                    Missing: {missing.join(", ")}
+                  </p>
+                  <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                    {applicationId
+                      ? "Open the application, add the missing field(s), then come back here. Everything is prefilled from the application row."
+                      : "Pick a base resume and fill the application role / company / JD above."}
+                  </p>
+                </div>
+              </div>
+              {applicationId && (
+                <div className="pl-6">
+                  <a
+                    href={`/applications/${applicationId}`}
+                    className="text-[11px] font-medium text-amber-800 underline hover:text-amber-900"
+                  >
+                    Open application →
+                  </a>
+                </div>
+              )}
+            </div>
+          );
+        })()}
       </CardContent>
     </Card>
   );
 
-  // Step 2 — Role Alignment.
-  // Detects the target role from the JD, lets the user pick how to handle
-  // the resume header, and lets them approve smart alignments for each
-  // existing experience entry.
-  const renderStep2RoleAlignment = () => (
+  // Role alignment — rendered inline on Step 1 so there's no extra step.
+  // The original 8-step wizard had this on its own page; users found it
+  // too heavy. Now it sits directly under the context review, with the
+  // same detect/smart-align behaviour but presented more compactly.
+  const renderRoleAlignmentInline = () => (
     <Card>
       <CardContent className="p-6 space-y-5">
         <div>
@@ -1099,6 +1121,75 @@ export function EnhanceResume({
             engine as the rest of the app.
           </p>
         </div>
+
+        {/* Scoring mode selector — lets users dial down the penalty
+            aggressiveness if the ATS-strict number feels too punitive. */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] text-gray-500">Scoring mode:</span>
+          {(["strict", "realistic", "bestfit"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setScoringMode(m)}
+              className={cn(
+                "text-[11px] rounded-md border px-2 py-0.5 transition-colors capitalize",
+                scoringMode === m
+                  ? "border-blue-200 bg-blue-50 text-blue-700"
+                  : "border-gray-200 text-gray-600 hover:bg-gray-50"
+              )}
+            >
+              {m === "strict"
+                ? "Strict ATS"
+                : m === "realistic"
+                  ? "Realistic recruiter"
+                  : "Best-fit"}
+            </button>
+          ))}
+        </div>
+        {baselineAts && baselineAts.penalties.length > 0 && (
+          <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-2.5">
+            <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5">
+              Active penalties — click to ignore
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {([
+                ["missingRequired", "Missing required"],
+                ["titleMismatch", "Title mismatch"],
+                ["years", "Years shortfall"],
+                ["evidence", "Skills not evidenced"],
+                ["domain", "Domain mismatch"],
+              ] as const).map(([key, label]) => {
+                const ignored = ignoredPenalties.has(key);
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setIgnoredPenalties((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(key)) next.delete(key);
+                        else next.add(key);
+                        return next;
+                      });
+                    }}
+                    className={cn(
+                      "text-[11px] rounded-md border px-2 py-0.5 transition-colors",
+                      ignored
+                        ? "border-gray-200 bg-white text-gray-400 line-through"
+                        : "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1.5 leading-snug">
+              Click a penalty to remove it from the score. Useful if, say, a "years"
+              requirement is overly strict but you're otherwise a strong fit.
+            </p>
+          </div>
+        )}
 
         {baselineLoading ? (
           <div className="rounded-lg border border-gray-200 p-8 text-center">
@@ -1555,25 +1646,51 @@ export function EnhanceResume({
     }
     return (
       <div className="space-y-4">
-        {/* Engine / provider status */}
-        {result.engine && (
-          <div className="flex items-start gap-2 p-3 rounded-lg bg-gray-50 border border-gray-100 text-[11px] text-gray-600">
-            <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-gray-400" />
-            <div>
-              <span className="font-medium text-gray-700">{result.engine.label}</span>
-              {result.engine.providerConfigured ? (
-                <span className="text-gray-500">
-                  {" "}
-                  · provider configured: {result.engine.providerName}
-                  {result.engine.providerModel ? ` (${result.engine.providerModel})` : ""}
-                </span>
-              ) : (
-                <span className="text-gray-500"> · no external AI provider configured</span>
-              )}
-              <p className="mt-0.5 text-gray-500 leading-relaxed">{result.engine.note}</p>
+        {/* Engine / provider status — loud and unambiguous: green for LLM success,
+             amber for fallback (with the exact failure reason), neutral otherwise. */}
+        {result.engine && (() => {
+          const kind = result.engine.kind;
+          const isFallback = kind === "llm-fallback";
+          const isLlm = kind === "llm";
+          const palette = isFallback
+            ? "border-amber-300 bg-amber-50 text-amber-900"
+            : isLlm
+              ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+              : "border-gray-200 bg-gray-50 text-gray-700";
+          const Icon = isFallback
+            ? AlertCircle
+            : isLlm
+              ? CheckCircle2
+              : ShieldCheck;
+          const iconColor = isFallback
+            ? "text-amber-600"
+            : isLlm
+              ? "text-emerald-600"
+              : "text-gray-400";
+          return (
+            <div className={cn("flex items-start gap-2 p-3 rounded-lg border text-[11px]", palette)}>
+              <Icon className={cn("w-3.5 h-3.5 mt-0.5 shrink-0", iconColor)} />
+              <div className="flex-1 min-w-0">
+                <span className="font-semibold">{result.engine.label}</span>
+                {result.engine.providerConfigured ? (
+                  <span className="opacity-80">
+                    {" "}
+                    · provider: {result.engine.providerName}
+                    {result.engine.providerModel ? ` (${result.engine.providerModel})` : ""}
+                  </span>
+                ) : (
+                  <span className="opacity-80"> · no external AI provider configured</span>
+                )}
+                <p className="mt-0.5 opacity-80 leading-relaxed">{result.engine.note}</p>
+                {isFallback && result.engine.fallbackReason && (
+                  <p className="mt-1 font-mono text-[10px] leading-snug opacity-70">
+                    Reason: {result.engine.fallbackReason}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Score comparison with Base / Enhanced / Active labels */}
         <Card>
@@ -1677,7 +1794,7 @@ export function EnhanceResume({
                     variant="ghost"
                     size="sm"
                     className="h-7"
-                    onClick={() => setStep(5)}
+                    onClick={() => setStep(3)}
                   >
                     Adjust rules
                   </Button>
@@ -1843,23 +1960,35 @@ export function EnhanceResume({
     <div className="space-y-4">
       {stepper}
 
-      {step === 1 && renderStep1()}
-      {step === 2 && renderStep2RoleAlignment()}
-      {step === 3 && renderStep3Score()}
-      {step === 4 && renderStep4Sections()}
-      {step === 5 && renderStep5Rules()}
-      {step === 6 && renderStep6Enhance()}
-      {step === 7 && renderStep7Compare()}
-      {step === 8 && renderStep8Save()}
+      {step === 1 && (
+        <>
+          {renderStep1()}
+          {renderRoleAlignmentInline()}
+        </>
+      )}
+      {step === 2 && renderStep3Score()}
+      {step === 3 && (
+        <>
+          {renderStep4Sections()}
+          {renderStep5Rules()}
+        </>
+      )}
+      {step === 4 && renderStep6Enhance()}
+      {step === 5 && (
+        <>
+          {renderStep7Compare()}
+          {renderStep8Save()}
+        </>
+      )}
 
       <div className="flex items-center justify-between">
         <Button variant="outline" size="sm" onClick={goBack} disabled={step === 1}>
           <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
           Back
         </Button>
-        {step < 8 && (
+        {step < 5 && (
           <Button
-            variant={step === 6 ? "outline" : "primary"}
+            variant={step === 4 ? "outline" : "primary"}
             size="sm"
             onClick={goNext}
             disabled={nextDisabled}

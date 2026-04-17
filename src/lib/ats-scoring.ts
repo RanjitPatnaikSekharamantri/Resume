@@ -48,6 +48,8 @@ export interface AtsSuggestion {
 
 export interface AtsScore {
   overall: number; // 0..100
+  /** Which scoring mode produced this breakdown. */
+  mode: ScoringMode;
   dimensions: {
     hardRequirements: AtsDimensionScore;
     keywordRelevance: AtsDimensionScore;
@@ -71,11 +73,31 @@ export interface AtsScore {
   };
 }
 
+/**
+ * Scoring mode — controls penalty aggressiveness.
+ *
+ * - strict:    every penalty applied at full weight (default, "ATS-only" view)
+ * - realistic: penalties scaled to ~60% — matches what a recruiter would care about
+ * - bestfit:   penalties scaled to ~30% + years-shortfall ignored entirely
+ *              (useful for emphasizing transferable fit)
+ */
+export type ScoringMode = "strict" | "realistic" | "bestfit";
+
 export interface AtsScoreInput {
   jobDescription: string;
   resumeText: string;
   jobTitle?: string;
   company?: string;
+  /**
+   * Optional: overrides the default "strict" mode. Callers can also pass
+   * `ignorePenalties` to opt out of specific penalty buckets entirely.
+   */
+  mode?: ScoringMode;
+  /**
+   * Opt-out buckets. Each key matches the `AtsPenalty.label`-ish kind:
+   *   "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain"
+   */
+  ignorePenalties?: Array<"missingRequired" | "titleMismatch" | "years" | "evidence" | "domain">;
 }
 
 // ── public API ─────────────────────────────────────────────────────────
@@ -114,52 +136,82 @@ export function calculateAtsScore(input: AtsScoreInput): AtsScore {
     readability.value;
 
   // ── penalties ──
+  //
+  // Each penalty is first computed at full strength, then scaled by the
+  // selected scoring mode and suppressed if the user opted out of that
+  // bucket. This keeps the deterministic logic auditable while letting
+  // the UI offer "Strict ATS" / "Realistic Recruiter" / "Best-Fit" views.
+  const mode: ScoringMode = input.mode || "strict";
+  const ignore = new Set(input.ignorePenalties || []);
+  const modeMultiplier =
+    mode === "strict" ? 1 : mode === "realistic" ? 0.6 : 0.3;
+
   const penalties: AtsPenalty[] = [];
 
+  const pushPenalty = (
+    kind: "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain",
+    label: string,
+    rawValue: number,
+    reason: string
+  ) => {
+    if (ignore.has(kind)) return;
+    // Best-fit mode ignores years shortfall entirely — transferability
+    // outweighs the recruiter's "X years" checklist.
+    if (mode === "bestfit" && kind === "years") return;
+    const value = Math.round(rawValue * modeMultiplier);
+    if (value <= 0) return;
+    penalties.push({ label, value, reason });
+  };
+
   if (hardReq.missingRequired.length > 0) {
-    const penalty = Math.min(10, hardReq.missingRequired.length * 2);
-    penalties.push({
-      label: "Missing required skills",
-      value: penalty,
-      reason: `JD explicitly requires ${hardReq.missingRequired
+    const raw = Math.min(10, hardReq.missingRequired.length * 2);
+    pushPenalty(
+      "missingRequired",
+      "Missing required skills",
+      raw,
+      `JD explicitly requires ${hardReq.missingRequired
         .slice(0, 4)
-        .join(", ")}${hardReq.missingRequired.length > 4 ? ", …" : ""} — not found in resume.`,
-    });
+        .join(", ")}${hardReq.missingRequired.length > 4 ? ", …" : ""} — not found in resume.`
+    );
   }
 
   if (experienceAlign.titleMismatch) {
-    penalties.push({
-      label: "Title / seniority mismatch",
-      value: 6,
-      reason: experienceAlign.titleMismatchReason || "Target role differs from recent experience.",
-    });
+    pushPenalty(
+      "titleMismatch",
+      "Title / seniority mismatch",
+      6,
+      experienceAlign.titleMismatchReason || "Target role differs from recent experience."
+    );
   }
 
   if (experienceAlign.yearsShortfall >= 2) {
-    const penalty = Math.min(8, experienceAlign.yearsShortfall * 2);
-    penalties.push({
-      label: "Insufficient years of experience",
-      value: penalty,
-      reason: `JD asks for ${experienceAlign.jdYears || "?"}+ years; resume shows ~${experienceAlign.resumeYears}.`,
-    });
+    const raw = Math.min(8, experienceAlign.yearsShortfall * 2);
+    pushPenalty(
+      "years",
+      "Insufficient years of experience",
+      raw,
+      `JD asks for ${experienceAlign.jdYears || "?"}+ years; resume shows ~${experienceAlign.resumeYears}.`
+    );
   }
 
   if (skillsEvidence.listedWithoutEvidence.length >= 3) {
-    penalties.push({
-      label: "Skills listed but not demonstrated",
-      value: 4,
-      reason: `${skillsEvidence.listedWithoutEvidence
+    pushPenalty(
+      "evidence",
+      "Skills listed but not demonstrated",
+      4,
+      `${skillsEvidence.listedWithoutEvidence
         .slice(0, 3)
-        .join(", ")} appear in skills but not in experience bullets.`,
-    });
+        .join(", ")} appear in skills but not in experience bullets.`
+    );
   }
 
   if (domain.value <= 4 && domain.max === 10) {
-    penalties.push({
-      label: "Domain mismatch",
-      value: 4,
-      reason: "Resume shows limited alignment with the JD's industry domain.",
-    });
+    pushPenalty(
+      "domain",
+      "Domain mismatch",
+      4,
+      "Resume shows limited alignment with the JD's industry domain."
+    );
   }
 
   const penaltyTotal = penalties.reduce((n, p) => n + p.value, 0);
@@ -217,6 +269,7 @@ export function calculateAtsScore(input: AtsScoreInput): AtsScore {
 
   return {
     overall,
+    mode,
     dimensions: {
       hardRequirements: toDim(hardReq, "Hard Requirements"),
       keywordRelevance: toDim(keywordRel, "Keyword Relevance"),
@@ -1002,6 +1055,7 @@ function emptyScore(): AtsScore {
   });
   return {
     overall: 0,
+    mode: "strict",
     dimensions: {
       hardRequirements: mk("Hard Requirements", 30),
       keywordRelevance: mk("Keyword Relevance", 20),

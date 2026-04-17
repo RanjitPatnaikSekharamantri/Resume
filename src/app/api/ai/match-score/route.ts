@@ -40,7 +40,21 @@ export async function POST(req: Request) {
       company,
       persistAsActive,
       sourceLabel,
-    } = body;
+      mode,
+      ignorePenalties,
+    } = body as {
+      applicationId?: string;
+      jobDescription: string;
+      resumeText: string;
+      jobTitle?: string;
+      company?: string;
+      persistAsActive?: boolean;
+      sourceLabel?: string;
+      mode?: "strict" | "realistic" | "bestfit";
+      ignorePenalties?: Array<
+        "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain"
+      >;
+    };
 
     if (!jobDescription) {
       return NextResponse.json(
@@ -60,6 +74,8 @@ export async function POST(req: Request) {
       resumeText,
       jobTitle,
       company,
+      mode,
+      ignorePenalties,
     });
 
     if (applicationId && persistAsActive) {

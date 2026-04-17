@@ -21,7 +21,21 @@ export async function POST(req: Request) {
     if (error) return error;
 
     const body = await req.json();
-    const { resumeId, jobDescription, resumeText: providedText } = body;
+    const {
+      resumeId,
+      jobDescription,
+      resumeText: providedText,
+      mode,
+      ignorePenalties,
+    } = body as {
+      resumeId?: string;
+      jobDescription: string;
+      resumeText?: string;
+      mode?: "strict" | "realistic" | "bestfit";
+      ignorePenalties?: Array<
+        "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain"
+      >;
+    };
 
     if (!jobDescription) {
       return NextResponse.json(
@@ -67,7 +81,12 @@ export async function POST(req: Request) {
     }
 
     const ats = resumeText
-      ? calculateAtsScore({ jobDescription, resumeText })
+      ? calculateAtsScore({
+          jobDescription,
+          resumeText,
+          mode,
+          ignorePenalties,
+        })
       : null;
 
     const legacyScore = ats

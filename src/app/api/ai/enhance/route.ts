@@ -73,6 +73,8 @@ export async function POST(req: Request) {
       sectionsToEnhance,
       rules,
       experienceRoleOverrides,
+      scoringMode,
+      ignorePenalties,
     } = body as {
       resumeId: string;
       jobDescription: string;
@@ -82,6 +84,10 @@ export async function POST(req: Request) {
       sectionsToEnhance?: string[];
       rules?: Record<string, unknown>;
       experienceRoleOverrides?: Record<string, string> | null;
+      scoringMode?: "strict" | "realistic" | "bestfit";
+      ignorePenalties?: Array<
+        "missingRequired" | "titleMismatch" | "years" | "evidence" | "domain"
+      >;
     };
 
     if (!resumeId) {
@@ -239,12 +245,16 @@ export async function POST(req: Request) {
       resumeText: originalText,
       jobTitle: role.trim(),
       company: company.trim(),
+      mode: scoringMode,
+      ignorePenalties,
     });
     const enhancedScore = calculateAtsScore({
       jobDescription: jobDescription.trim(),
       resumeText: previewText,
       jobTitle: role.trim(),
       company: company.trim(),
+      mode: scoringMode,
+      ignorePenalties,
     });
 
     // JD-derived keywords bolded inline at render time (DOCX/PDF).

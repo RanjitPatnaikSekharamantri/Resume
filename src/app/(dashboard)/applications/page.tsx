@@ -1,17 +1,26 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { KanbanBoard } from "@/components/kanban/kanban-board";
 import { ApplicationForm, ApplicationFormData } from "@/components/applications/application-form";
 import { KanbanCardData } from "@/components/kanban/kanban-card";
-import { Plus, LayoutGrid, List, Briefcase } from "lucide-react";
+import { Plus, LayoutGrid, List, Briefcase, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { getStatusLabel, getStatusColor } from "@/lib/utils";
 import { formatToUserTime } from "@/lib/timezone";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 type ViewMode = "kanban" | "list";
 
@@ -22,6 +31,8 @@ interface AppRow extends KanbanCardData {
 }
 
 export default function ApplicationsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [applications, setApplications] = useState<AppRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
@@ -30,6 +41,19 @@ export default function ApplicationsPage() {
 
   useEffect(() => {
     fetch("/api/resumes").then(r => r.json()).then(d => { if (Array.isArray(d)) setResumes(d); }).catch(() => {});
+  }, []);
+
+  // Auto-open the create dialog when the route is visited with ?new=1.
+  // This makes the "New Application" CTA on the Command Center feel
+  // single-click instead of two-step.
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      setFormOpen(true);
+      // Strip the query param from the URL so a browser refresh doesn't
+      // re-open the dialog.
+      router.replace("/applications");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchApplications = useCallback(async () => {
@@ -49,6 +73,11 @@ export default function ApplicationsPage() {
     fetchApplications();
   }, [fetchApplications]);
 
+  // After-create CTA state: when a new application is created we surface a
+  // "Tailor resume now / I'll do it later" choice so users can move
+  // straight into the enhance flow without re-entering any data.
+  const [postCreateAppId, setPostCreateAppId] = useState<string | null>(null);
+
   const handleCreate = async (data: ApplicationFormData) => {
     const res = await fetch("/api/applications", {
       method: "POST",
@@ -59,7 +88,11 @@ export default function ApplicationsPage() {
       const err = await res.json();
       throw new Error(err.error || "Failed to create");
     }
+    const created = await res.json();
     fetchApplications();
+    if (created?.id) {
+      setPostCreateAppId(created.id);
+    }
   };
 
   const handleStatusChange = async (
@@ -231,6 +264,96 @@ export default function ApplicationsPage() {
         onSubmit={handleCreate}
         resumes={resumes}
       />
+
+      <PostCreateCta
+        applicationId={postCreateAppId}
+        onDismiss={() => setPostCreateAppId(null)}
+      />
     </>
+  );
+}
+
+// ── post-create CTA ───────────────────────────────────────────────────
+
+function PostCreateCta({
+  applicationId,
+  onDismiss,
+}: {
+  applicationId: string | null;
+  onDismiss: () => void;
+}) {
+  const router = useRouter();
+  const [app, setApp] = useState<{
+    jobTitle?: string;
+    company?: string;
+    jobDescription?: string;
+    resumeVersions?: { baseResumeId: string | null }[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!applicationId) {
+      setApp(null);
+      return;
+    }
+    fetch(`/api/applications/${applicationId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setApp)
+      .catch(() => {});
+  }, [applicationId]);
+
+  if (!applicationId) return null;
+
+  const hasJd = !!app?.jobDescription?.trim();
+  const linkedResumeId = app?.resumeVersions?.find((rv) => rv.baseResumeId)?.baseResumeId;
+
+  return (
+    <Dialog open={!!applicationId} onOpenChange={(o) => (!o ? onDismiss() : null)}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Application saved 🎉</DialogTitle>
+          <DialogDescription>
+            {app?.jobTitle && app?.company
+              ? `${app.jobTitle} at ${app.company} is now tracked. Want to tailor your resume for this role right now?`
+              : "Want to tailor your resume for this role now?"}
+          </DialogDescription>
+        </DialogHeader>
+        {!hasJd && (
+          <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed">
+            No job description was added. You can still tailor later — open
+            the application and paste the JD to unlock enhancement.
+          </div>
+        )}
+        <DialogFooter className="gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              router.push(`/applications/${applicationId}`);
+              onDismiss();
+            }}
+          >
+            I&apos;ll do it later
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              const params = new URLSearchParams({
+                applicationId,
+                mode: "enhance",
+              });
+              if (app?.jobTitle) params.set("role", app.jobTitle);
+              if (app?.company) params.set("company", app.company);
+              if (app?.jobDescription) params.set("jd", app.jobDescription);
+              if (linkedResumeId) params.set("resumeId", linkedResumeId);
+              router.push(`/ai-studio?${params.toString()}`);
+              onDismiss();
+            }}
+            disabled={!hasJd}
+          >
+            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+            Tailor resume now
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
